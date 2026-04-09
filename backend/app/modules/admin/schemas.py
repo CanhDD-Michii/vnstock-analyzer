@@ -14,6 +14,7 @@ class IngestPricePayload(CamelModel):
 class CrawlTriggerResponse(CamelModel):
     inserted: int
     updated: int
+    skipped: int = 0
     message: str | None = None
 
 
@@ -47,6 +48,33 @@ class UserPatchBody(CamelModel):
     )
     role: Literal["user", "admin"] | None = None
     status: Literal["active", "inactive"] | None = None
+
+
+class CrawlScheduleUpsertBody(CamelModel):
+    """Tạo/cập nhật lịch crawl cho một mã."""
+
+    is_enabled: bool | None = Field(
+        default=None,
+        validation_alias=AliasChoices("isEnabled", "is_enabled"),
+    )
+    interval_minutes: int | None = Field(
+        default=None,
+        ge=15,
+        le=10080,
+        validation_alias=AliasChoices("intervalMinutes", "interval_minutes"),
+    )
+    vietstock_cookie: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("vietstockCookie", "vietstock_cookie"),
+    )
+    request_verification_token: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "requestVerificationToken",
+            "request_verification_token",
+            "__RequestVerificationToken",
+        ),
+    )
 
 
 class VietstockCrawlBody(CamelModel):

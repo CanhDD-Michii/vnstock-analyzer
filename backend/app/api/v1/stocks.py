@@ -7,6 +7,7 @@ from app.modules.stocks.schemas import (
     PriceBarResponse,
     StockDetailResponse,
     StockListItemResponse,
+    StockPerformanceRowResponse,
 )
 from app.modules.stocks.service import StockService
 from app.shared.schemas.common import ApiSuccessResponse
@@ -21,6 +22,22 @@ def list_stocks(
     db: Session = Depends(get_db),
 ) -> ApiSuccessResponse[list[StockListItemResponse]]:
     data = StockService(db).list_stocks(skip=skip, limit=limit)
+    return ApiSuccessResponse(data=data, message="Success")
+
+
+@router.get(
+    "/performance-board",
+    response_model=ApiSuccessResponse[list[StockPerformanceRowResponse]],
+)
+def list_performance_board(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
+    price_limit: int = Query(800, ge=50, le=2000),
+    db: Session = Depends(get_db),
+) -> ApiSuccessResponse[list[StockPerformanceRowResponse]]:
+    data = StockService(db).list_performance_board(
+        skip=skip, limit=limit, price_limit=price_limit
+    )
     return ApiSuccessResponse(data=data, message="Success")
 
 

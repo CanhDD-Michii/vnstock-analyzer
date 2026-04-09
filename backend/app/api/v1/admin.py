@@ -4,8 +4,10 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_admin, get_db
-from app.db.models import User
+from app.core.exceptions import StockNotFoundError
+from app.db.models import Stock, User
 from app.modules.admin.schemas import (
+    CrawlScheduleUpsertBody,
     CrawlTriggerResponse,
     IngestPricePayload,
     StockCreateBody,
@@ -43,6 +45,38 @@ class CrawlLogRow(CamelModel):
     message: str | None
     started_at: str | None
     finished_at: str | None
+
+
+class CrawlScheduleRow(CamelModel):
+    id: int
+    stock_id: int
+    ticker: str
+    company_name: str
+    is_enabled: bool
+    interval_minutes: int
+    next_run_at: str | None
+    last_run_at: str | None
+    last_run_status: str | None
+    last_run_message: str | None
+    has_vietstock_cookie: bool
+    has_request_verification_token: bool
+
+
+def _crawl_schedule_row(sched, stock) -> CrawlScheduleRow:
+    return CrawlScheduleRow(
+        id=sched.id,
+        stock_id=sched.stock_id,
+        ticker=stock.ticker,
+        company_name=stock.company_name,
+        is_enabled=sched.is_enabled,
+        interval_minutes=sched.interval_minutes,
+        next_run_at=sched.next_run_at.isoformat() if sched.next_run_at else None,
+        last_run_at=sched.last_run_at.isoformat() if sched.last_run_at else None,
+        last_run_status=sched.last_run_status,
+        last_run_message=sched.last_run_message,
+        has_vietstock_cookie=bool((sched.vietstock_cookie or "").strip()),
+        has_request_verification_token=bool((sched.request_verification_token or "").strip()),
+    )
 
 
 class AnalysisAdminRow(CamelModel):
@@ -174,9 +208,9 @@ def admin_crawl_ticker(
     _admin: User = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ) -> ApiSuccessResponse[CrawlTriggerResponse]:
-    ins, upd = AdminService(db).trigger_price_crawl(ticker, body.data)
+    ins, upd, sk = AdminService(db).trigger_price_crawl(ticker, body.data)
     return ApiSuccessResponse(
-        data=CrawlTriggerResponse(inserted=ins, updated=upd, message="OK"),
+        data=CrawlTriggerResponse(inserted=ins, updated=upd, skipped=sk, message="OK"),
         message="Crawl hoàn tất",
     )
 
@@ -191,9 +225,9 @@ def admin_crawl_vietstock(
     _admin: User = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ) -> ApiSuccessResponse[CrawlTriggerResponse]:
-    ins, upd = AdminService(db).trigger_vietstock_crawl(ticker, body)
+    ins, upd, sk = AdminService(db).trigger_vietstock_crawl(ticker, body)
     return ApiSuccessResponse(
-        data=CrawlTriggerResponse(inserted=ins, updated=upd, message="OK"),
+        data=CrawlTriggerResponse(inserted=ins, updated=upd, skipped=sk, message="OK"),
         message="Crawl VietStock hoàn tất",
     )
 
@@ -218,6 +252,48 @@ def admin_crawl_logs(
         for lg in logs
     ]
     return ApiSuccessResponse(data=data, message="Success")
+
+
+@router.get("/crawl/schedules", response_model=ApiSuccessResponse[list[CrawlScheduleRow]])
+def admin_list_crawl_schedules(
+    _admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+) -> ApiSuccessResponse[list[CrawlScheduleRow]]:
+    schedules = AdminService(db).list_crawl_schedules()
+    data = [_crawl_schedule_row(s, s.stock) for s in schedules]
+    return ApiSuccessResponse(data=data, message="Success")
+
+
+@router.put("/crawl/schedules/{ticker}", response_model=ApiSuccessResponse[CrawlScheduleRow])
+def admin_upsert_crawl_schedule(
+    ticker: str,
+    body: CrawlScheduleUpsertBody,
+    _admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+) -> ApiSuccessResponse[CrawlScheduleRow]:
+    sched = AdminService(db).upsert_crawl_schedule(ticker, body)
+    stock = db.get(Stock, sched.stock_id)
+    if stock is None:
+        raise StockNotFoundError()
+    return ApiSuccessResponse(
+        data=_crawl_schedule_row(sched, stock),
+        message="Đã lưu lịch crawl",
+    )
+
+
+
+class AdminOkBody(CamelModel):
+    ok: bool = True
+
+
+@router.delete("/crawl/schedules/{ticker}", response_model=ApiSuccessResponse[AdminOkBody])
+def admin_delete_crawl_schedule(
+    ticker: str,
+    _admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+) -> ApiSuccessResponse[AdminOkBody]:
+    AdminService(db).delete_crawl_schedule(ticker)
+    return ApiSuccessResponse(data=AdminOkBody(ok=True), message="Đã xóa lịch crawl")
 
 
 @router.get("/analysis", response_model=ApiSuccessResponse[list[AnalysisAdminRow]])

@@ -6,12 +6,14 @@ from sqlalchemy.orm import Session
 
 from app.core.exceptions import AppError, StockNotFoundError
 from app.modules.indicators.pipeline import MIN_BARS, run_indicator_engine
+from app.modules.stocks.performance import compute_performance_from_bars
 from app.modules.stocks.repository import StockRepository
 from app.modules.stocks.schemas import (
     KeyMetricsResponse,
     PriceBarResponse,
     StockDetailResponse,
     StockListItemResponse,
+    StockPerformanceRowResponse,
 )
 
 
@@ -31,6 +33,34 @@ class StockService:
             )
             for s in self._repo.list_active(skip=skip, limit=limit)
         ]
+
+    def list_performance_board(
+        self,
+        *,
+        skip: int = 0,
+        limit: int = 100,
+        price_limit: int = 800,
+    ) -> list[StockPerformanceRowResponse]:
+        rows_out: list[StockPerformanceRowResponse] = []
+        for s in self._repo.list_active(skip=skip, limit=limit):
+            hist = self._repo.get_price_rows_asc(s.id, limit=price_limit)
+            bars = [self._repo.price_row_to_bar(r) for r in hist]
+            p = compute_performance_from_bars(bars)
+            rows_out.append(
+                StockPerformanceRowResponse(
+                    ticker=s.ticker,
+                    company_name=s.company_name,
+                    as_of_date=p["as_of_date"],
+                    close_price=p["close_price"],
+                    pct_day=p["pct_day"],
+                    pct_week=p["pct_week"],
+                    pct_month=p["pct_month"],
+                    pct_quarter=p["pct_quarter"],
+                    pct_ytd=p["pct_ytd"],
+                    pct_year=p["pct_year"],
+                )
+            )
+        return rows_out
 
     def get_detail(self, ticker: str) -> StockDetailResponse:
         s = self._repo.get_by_ticker(ticker)

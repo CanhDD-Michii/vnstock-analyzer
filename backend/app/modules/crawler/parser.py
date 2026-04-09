@@ -28,10 +28,30 @@ def normalize_price_row(raw: dict[str, Any]) -> dict[str, Any]:
     td = raw.get("TradingDate") or raw.get("trading_date") or raw.get("date")
     if td is None:
         raise ValueError("Thiếu TradingDate")
-    open_p = raw.get("open_price") or raw.get("OpenIndex") or raw.get("open")
-    high_p = raw.get("high_price") or raw.get("HighestIndex") or raw.get("high")
-    low_p = raw.get("low_price") or raw.get("LowestIndex") or raw.get("low")
-    close_p = raw.get("close_price") or raw.get("CloseIndex") or raw.get("close")
+    open_p = (
+        raw.get("OpenPrice")
+        or raw.get("open_price")
+        or raw.get("OpenIndex")
+        or raw.get("open")
+    )
+    high_p = (
+        raw.get("HighestPrice")
+        or raw.get("high_price")
+        or raw.get("HighestIndex")
+        or raw.get("high")
+    )
+    low_p = (
+        raw.get("LowestPrice")
+        or raw.get("low_price")
+        or raw.get("LowestIndex")
+        or raw.get("low")
+    )
+    close_p = (
+        raw.get("ClosePrice")
+        or raw.get("close_price")
+        or raw.get("CloseIndex")
+        or raw.get("close")
+    )
     vol = raw.get("total_volume") or raw.get("TotalVol") or raw.get("volume")
     if open_p is None or high_p is None or low_p is None or close_p is None:
         raise ValueError("Thiếu trường giá bắt buộc")

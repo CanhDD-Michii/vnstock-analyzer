@@ -65,3 +65,9 @@ class Stock(Base):
         back_populates="stock",
         cascade="all, delete-orphan",
     )
+    crawl_schedule: Mapped["CrawlSchedule | None"] = relationship(
+        "CrawlSchedule",
+        back_populates="stock",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )

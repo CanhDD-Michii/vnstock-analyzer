@@ -1,5 +1,6 @@
 from app.db.models.analysis import AnalysisRequest, AnalysisResult
 from app.db.models.crawl import CrawlLog
+from app.db.models.crawl_schedule import CrawlSchedule
 from app.db.models.financial import StockFinancialReport
 from app.db.models.metrics import StockKeyMetrics
 from app.db.models.price_history import StockPriceHistory
@@ -20,5 +21,6 @@ __all__ = [
     "AnalysisRequest",
     "AnalysisResult",
     "CrawlLog",
+    "CrawlSchedule",
     "AiPromptConfig",
 ]

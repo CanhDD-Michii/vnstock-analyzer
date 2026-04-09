@@ -1,13 +1,33 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models import CrawlLog, Stock, StockPriceHistory
+from app.modules.crawler.dates import today_vn
 from app.modules.crawler.parser import normalize_price_row
+
+
+def _num_eq(a: object, b: object) -> bool:
+    try:
+        return float(a) == float(b)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return a == b
+
+
+def _price_row_unchanged(existing: StockPriceHistory, row: dict[str, Any]) -> bool:
+    return (
+        _num_eq(existing.open_price, row["open_price"])
+        and _num_eq(existing.high_price, row["high_price"])
+        and _num_eq(existing.low_price, row["low_price"])
+        and _num_eq(existing.close_price, row["close_price"])
+        and _num_eq(existing.price_change or 0, row.get("price_change") or 0)
+        and _num_eq(existing.percent_change or 0, row.get("percent_change") or 0)
+        and int(existing.total_volume) == int(row.get("total_volume") or 0)
+    )
 
 
 class CrawlerService:
@@ -20,7 +40,9 @@ class CrawlerService:
         items: list[dict[str, Any]],
         *,
         crawl_type: str = "price_json",
-    ) -> tuple[int, int]:
+        skip_locked_historical: bool = False,
+        price_session_date: date | None = None,
+    ) -> tuple[int, int, int]:
         started = datetime.now(timezone.utc)
         log = CrawlLog(
             stock_id=stock.id,
@@ -36,16 +58,25 @@ class CrawlerService:
         log_id = log.id
         inserted = 0
         updated = 0
+        skipped = 0
+        session_day = price_session_date if price_session_date is not None else today_vn()
         try:
             for raw in items:
                 row = normalize_price_row(raw)
+                td = row["trading_date"]
                 existing = self._db.scalar(
                     select(StockPriceHistory).where(
                         StockPriceHistory.stock_id == stock.id,
-                        StockPriceHistory.trading_date == row["trading_date"],
+                        StockPriceHistory.trading_date == td,
                     )
                 )
+                if existing and skip_locked_historical and td != session_day:
+                    skipped += 1
+                    continue
                 if existing:
+                    if _price_row_unchanged(existing, row):
+                        skipped += 1
+                        continue
                     existing.open_price = row["open_price"]
                     existing.high_price = row["high_price"]
                     existing.low_price = row["low_price"]
@@ -59,7 +90,7 @@ class CrawlerService:
                     self._db.add(
                         StockPriceHistory(
                             stock_id=stock.id,
-                            trading_date=row["trading_date"],
+                            trading_date=td,
                             open_price=row["open_price"],
                             high_price=row["high_price"],
                             low_price=row["low_price"],
@@ -85,7 +116,7 @@ class CrawlerService:
         lg = self._db.get(CrawlLog, log_id)
         if lg:
             lg.status = "success"
-            lg.message = f"inserted={inserted}, updated={updated}"
+            lg.message = f"inserted={inserted}, updated={updated}, skipped={skipped}"
             lg.finished_at = datetime.now(timezone.utc)
             self._db.commit()
-        return inserted, updated
+        return inserted, updated, skipped

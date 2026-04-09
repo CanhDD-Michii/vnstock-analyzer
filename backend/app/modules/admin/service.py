@@ -1,17 +1,34 @@
 from __future__ import annotations
 
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import desc, func, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.core.exceptions import AppError, StockNotFoundError
-from app.db.models import AnalysisResult, CrawlLog, Stock, User, UserRole, UserStatus
+from app.db.models import (
+    AnalysisResult,
+    CrawlLog,
+    CrawlSchedule,
+    Stock,
+    StockPriceHistory,
+    User,
+    UserRole,
+    UserStatus,
+)
 from app.modules.analysis_history.repository import AnalysisHistoryRepository
-from app.modules.admin.schemas import StockCreateBody, StockPatchBody, UserPatchBody, VietstockCrawlBody
+from app.modules.admin.schemas import (
+    CrawlScheduleUpsertBody,
+    StockCreateBody,
+    StockPatchBody,
+    UserPatchBody,
+    VietstockCrawlBody,
+)
+from app.modules.crawler.dates import today_vn
 from app.modules.crawler.service import CrawlerService
-from app.modules.crawler.vietstock_client import fetch_vietstock_price_series
+from app.modules.crawler.vietstock_client import fetch_vietstock_list_price_backward
 from app.modules.stocks.repository import StockRepository
 from app.modules.users.repository import UserRepository
 
@@ -94,11 +111,27 @@ class AdminService:
         q = select(Stock).order_by(Stock.ticker).offset(skip).limit(limit)
         return list(self._db.scalars(q).all())
 
-    def trigger_price_crawl(self, ticker: str, items: list[dict[str, Any]]) -> tuple[int, int]:
+    def trigger_price_crawl(self, ticker: str, items: list[dict[str, Any]]) -> tuple[int, int, int]:
         stock = self._stocks.get_by_ticker(ticker)
         if not stock:
             raise StockNotFoundError()
         return self._crawler.ingest_price_json(stock, items)
+
+    def _resolve_initial_to_date(self, stock_id: int, metadata: dict[str, Any]) -> date:
+        strat = metadata.get("crawl_strategy")
+        if not isinstance(strat, dict):
+            strat = {}
+        mode = strat.get("initial_to_date", "today")
+        if mode != "oldest_in_db_minus_1":
+            return today_vn()
+        min_d = self._db.scalar(
+            select(func.min(StockPriceHistory.trading_date)).where(
+                StockPriceHistory.stock_id == stock_id
+            )
+        )
+        if min_d is None:
+            return today_vn()
+        return min_d - timedelta(days=1)
 
     def create_stock(self, body: StockCreateBody) -> Stock:
         t = body.ticker.strip().upper()
@@ -133,37 +166,117 @@ class AdminService:
             raise StockNotFoundError()
         return stock
 
-    def trigger_vietstock_crawl(self, ticker: str, body: VietstockCrawlBody) -> tuple[int, int]:
+    def trigger_vietstock_crawl(self, ticker: str, body: VietstockCrawlBody) -> tuple[int, int, int]:
         stock = self._stocks.get_by_ticker(ticker)
         if not stock:
             raise StockNotFoundError()
         raw_meta = stock.crawl_metadata_json
         if not isinstance(raw_meta, dict):
-            raise AppError(
-                "Mã chưa có crawlMetadata (JSON) — cấu hình url/form trước khi crawl",
-                "CRAWL_METADATA_MISSING",
-                status_code=400,
-            )
+            # Không bắt buộc lưu metadata trên mã: dùng mặc định (URL ListPrice, form/strategy trong vietstock_client).
+            raw_meta = {}
+        session_day = today_vn()
+        initial = self._resolve_initial_to_date(stock.id, raw_meta)
         try:
-            series = fetch_vietstock_price_series(
+            series = fetch_vietstock_list_price_backward(
                 raw_meta,
+                stock.ticker,
                 cookie=body.cookie,
                 request_verification_token=body.request_verification_token,
                 extra_form=body.extra_form,
+                initial_to_date=initial,
             )
         except ValueError as e:
             raise AppError(str(e), "CRAWL_FETCH_FAILED", status_code=422) from e
         if not series:
             raise AppError(
-                "Không trích được dãy nến từ JSON (thử response_path / response_series_keys)",
+                "GetStockDeal_ListPriceByTimeFrame không trả bản ghi (url, cookie, token, mã)",
                 "CRAWL_EMPTY_SERIES",
                 status_code=422,
             )
-        return self._crawler.ingest_price_json(stock, series, crawl_type="vietstock_eod")
+        return self._crawler.ingest_price_json(
+            stock,
+            series,
+            crawl_type="vietstock_list_price",
+            skip_locked_historical=True,
+            price_session_date=session_day,
+        )
 
     def list_crawl_logs(self, limit: int = 100) -> list[CrawlLog]:
         q = select(CrawlLog).order_by(desc(CrawlLog.created_at)).limit(limit)
         return list(self._db.scalars(q).all())
+
+    def list_crawl_schedules(self) -> list[CrawlSchedule]:
+        q = (
+            select(CrawlSchedule)
+            .options(joinedload(CrawlSchedule.stock))
+            .join(Stock, CrawlSchedule.stock_id == Stock.id)
+            .order_by(Stock.ticker)
+        )
+        return list(self._db.scalars(q).unique().all())
+
+    def upsert_crawl_schedule(self, ticker: str, body: CrawlScheduleUpsertBody) -> CrawlSchedule:
+        t = ticker.strip().upper()
+        stock = self._stocks.get_by_ticker(t)
+        if not stock:
+            raise StockNotFoundError()
+        sched = self._db.scalar(select(CrawlSchedule).where(CrawlSchedule.stock_id == stock.id))
+        now = datetime.now(timezone.utc)
+        interval_changed = False
+
+        if sched is None:
+            if body.interval_minutes is None:
+                raise AppError(
+                    "intervalMinutes bắt buộc khi tạo lịch crawl mới",
+                    "SCHEDULE_INTERVAL_REQUIRED",
+                    status_code=400,
+                )
+            enabled = body.is_enabled if body.is_enabled is not None else True
+            sched = CrawlSchedule(
+                stock_id=stock.id,
+                interval_minutes=body.interval_minutes,
+                is_enabled=enabled,
+                next_run_at=(
+                    now + timedelta(minutes=body.interval_minutes) if enabled else None
+                ),
+            )
+            self._db.add(sched)
+            self._db.flush()
+        else:
+            if "interval_minutes" in body.model_fields_set and body.interval_minutes is not None:
+                if body.interval_minutes != sched.interval_minutes:
+                    interval_changed = True
+                sched.interval_minutes = body.interval_minutes
+            if "is_enabled" in body.model_fields_set and body.is_enabled is not None:
+                sched.is_enabled = body.is_enabled
+                if body.is_enabled and sched.next_run_at is None:
+                    sched.next_run_at = now + timedelta(minutes=sched.interval_minutes)
+
+        if "vietstock_cookie" in body.model_fields_set:
+            c = body.vietstock_cookie
+            sched.vietstock_cookie = (c.strip() or None) if isinstance(c, str) else None
+        if "request_verification_token" in body.model_fields_set:
+            tok = body.request_verification_token
+            sched.request_verification_token = (tok.strip() or None) if isinstance(tok, str) else None
+
+        if interval_changed:
+            sched.next_run_at = now + timedelta(minutes=sched.interval_minutes)
+
+        if sched.is_enabled and sched.next_run_at is None:
+            sched.next_run_at = now + timedelta(minutes=sched.interval_minutes)
+
+        self._db.commit()
+        self._db.refresh(sched)
+        return sched
+
+    def delete_crawl_schedule(self, ticker: str) -> None:
+        t = ticker.strip().upper()
+        stock = self._stocks.get_by_ticker(t)
+        if not stock:
+            raise StockNotFoundError()
+        sched = self._db.scalar(select(CrawlSchedule).where(CrawlSchedule.stock_id == stock.id))
+        if sched:
+            self._db.delete(sched)
+            self._db.commit()
 
     def list_analysis_results(self, skip: int = 0, limit: int = 100) -> list[AnalysisResult]:
         return self._analysis.list_all_results(skip=skip, limit=limit)

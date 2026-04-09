@@ -12,6 +12,7 @@ from app.core.logging import configure_logging, get_logger
 from app.db import models  # noqa: F401
 from app.db.seed import run_all_seeds
 from app.db.session import SessionLocal, init_db_schema
+from app.modules.scheduler import start_crawl_scheduler, stop_crawl_scheduler
 from app.shared.schemas.common import ApiErrorBody, ApiSuccessResponse, HealthData
 
 configure_logging()
@@ -28,7 +29,9 @@ async def lifespan(_app: FastAPI):
         logger.exception(
             "Không khởi tạo DB/seed (kiểm tra MySQL và DATABASE_URL). API cần DB sẽ lỗi."
         )
+    start_crawl_scheduler()
     yield
+    stop_crawl_scheduler()
 
 
 app = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=lifespan)

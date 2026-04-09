@@ -50,3 +50,18 @@ class TechnicalSnapshotResponse(CamelModel):
     """Snapshot chỉ báo mới nhất (tính runtime từ giá lịch sử)."""
 
     model_config = {"extra": "allow"}
+
+
+class StockPerformanceRowResponse(CamelModel):
+    """Hiệu suất giá theo kỳ, tính từ stock_price_histories."""
+
+    ticker: str
+    company_name: str
+    as_of_date: date | None = None
+    close_price: float | None = None
+    pct_day: float | None = None
+    pct_week: float | None = None
+    pct_month: float | None = None
+    pct_quarter: float | None = None
+    pct_ytd: float | None = None
+    pct_year: float | None = None
