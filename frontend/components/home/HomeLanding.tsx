@@ -125,12 +125,6 @@ export function HomeLanding() {
             {!loading && user && (
               <>
                 <Link
-                  href={ROUTES.home}
-                  className="rounded-lg px-3 py-2 text-zinc-600 transition hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
-                >
-                  Trang chủ
-                </Link>
-                <Link
                   href={ROUTES.history}
                   className="rounded-lg px-3 py-2 text-zinc-600 transition hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
                 >

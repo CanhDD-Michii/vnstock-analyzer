@@ -1,16 +1,27 @@
 "use client";
 
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, Loader2 } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { PageShell } from "@/components/common/PageShell";
 import { SectionCard } from "@/components/ui/SectionCard";
 import { ROUTES } from "@/constants/routes";
 import { ADMIN_DEFAULT_STOCK_TICKER, createDefaultVietstockCrawlMetadata } from "@/constants/vietstock-defaults";
 import { useAuth } from "@/hooks/useAuth";
+import {
+  crawlStatusPresentation,
+  labelCrawlType,
+  parseIngestStatsMessage,
+} from "@/lib/crawl-log-display";
 import * as adminApi from "@/services/admin.service";
 
 const PAGE_TITLE = "Quản lý mã chứng khoán";
+
+const VIETSTOCK_CRAWL_PROGRESS_HINTS = [
+  "Đang crawl — server đang gọi VietStock (ListPrice) và có thể lùi nhiều ngày theo metadata.",
+  "Vẫn đang chạy — với lịch sử dài, một lần crawl có thể mất vài phút; vui lòng không đóng trang.",
+  "Nếu quá lâu: kiểm tra cookie và __RequestVerificationToken còn khớp phiên trình duyệt trên VietStock.",
+] as const;
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -43,6 +54,8 @@ export default function StockSymbolManagementPage() {
   const [schedCookie, setSchedCookie] = useState("");
   const [schedToken, setSchedToken] = useState("");
   const [schedSaving, setSchedSaving] = useState(false);
+  const [vietstockCrawling, setVietstockCrawling] = useState(false);
+  const [crawlProgressStep, setCrawlProgressStep] = useState(0);
 
   const refreshData = useCallback(async () => {
     const [s, l, sch] = await Promise.all([
@@ -111,6 +124,25 @@ export default function StockSymbolManagementPage() {
       return new Date(iso).toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" });
     } catch {
       return iso;
+    }
+  }
+
+  const tickerByStockId = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const s of stocks) m.set(s.id, s.ticker);
+    return m;
+  }, [stocks]);
+
+  function statusBadgeClass(tone: ReturnType<typeof crawlStatusPresentation>["tone"]): string {
+    switch (tone) {
+      case "success":
+        return "bg-emerald-500/15 text-emerald-800 ring-1 ring-emerald-500/25 dark:text-emerald-300 dark:ring-emerald-400/20";
+      case "failed":
+        return "bg-red-500/15 text-red-800 ring-1 ring-red-500/25 dark:text-red-300 dark:ring-red-400/20";
+      case "running":
+        return "bg-amber-500/15 text-amber-900 ring-1 ring-amber-500/25 dark:text-amber-200 dark:ring-amber-400/20";
+      default:
+        return "bg-zinc-500/10 text-zinc-700 ring-1 ring-zinc-500/15 dark:text-zinc-300 dark:ring-zinc-500/20";
     }
   }
 
@@ -258,17 +290,28 @@ export default function StockSymbolManagementPage() {
       setErr("Chưa có mã để crawl.");
       return;
     }
+    setVietstockCrawling(true);
+    setCrawlProgressStep(0);
+    const progressTimer = window.setInterval(() => {
+      setCrawlProgressStep((s) =>
+        Math.min(s + 1, VIETSTOCK_CRAWL_PROGRESS_HINTS.length - 1),
+      );
+    }, 12000);
     try {
       const res = await adminApi.adminCrawlVietstock(crawlTicker, {
         cookie: vsCookie.trim() || undefined,
         requestVerificationToken: vsToken.trim() || undefined,
       });
       setMsg(
-        `VietStock: inserted=${res.inserted}, updated=${res.updated}, skipped=${res.skipped}`,
+        `VietStock hoàn tất (${crawlTicker}): thêm ${res.inserted}, cập nhật ${res.updated}, bỏ qua ${res.skipped}.`,
       );
       setLogs(await adminApi.adminCrawlLogs());
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : "Crawl VietStock thất bại");
+    } finally {
+      window.clearInterval(progressTimer);
+      setVietstockCrawling(false);
+      setCrawlProgressStep(0);
     }
   }
 
@@ -339,13 +382,85 @@ export default function StockSymbolManagementPage() {
         </Link>
       </div>
       <SectionCard title="Crawl logs (gần nhất)">
-        <ul className="max-h-48 overflow-auto text-xs">
-          {logs.map((l) => (
-            <li key={l.id}>
-              {l.crawlType} · {l.status} · {l.message ?? ""}
-            </li>
-          ))}
-        </ul>
+        <p className="mb-3 text-xs leading-relaxed text-zinc-500 dark:text-zinc-400">
+          <span className="font-medium text-zinc-600 dark:text-zinc-300">Thêm mới</span>: bản ghi ngày giao dịch mới.{" "}
+          <span className="font-medium text-zinc-600 dark:text-zinc-300">Cập nhật</span>: đã có ngày đó, OHLCV thay đổi.{" "}
+          <span className="font-medium text-zinc-600 dark:text-zinc-300">Bỏ qua</span>: trùng ngày, dữ liệu không đổi.
+        </p>
+        <div className="max-h-80 space-y-2 overflow-auto pr-0.5">
+          {logs.length === 0 ? (
+            <p className="text-xs text-zinc-500">Chưa có log.</p>
+          ) : (
+            logs.map((l) => {
+              const { stats, freeText } = parseIngestStatsMessage(l.message);
+              const st = crawlStatusPresentation(l.status);
+              const when = l.finishedAt ?? l.startedAt;
+              const ticker =
+                l.stockId != null ? (tickerByStockId.get(l.stockId) ?? `#${l.stockId}`) : "—";
+              return (
+                <div
+                  key={l.id}
+                  className="rounded-xl border border-zinc-200/90 bg-zinc-50/80 px-3 py-2.5 dark:border-zinc-800 dark:bg-zinc-900/40"
+                >
+                  <div className="flex flex-wrap items-center gap-2 gap-y-1.5">
+                    <time
+                      className="text-[11px] font-medium tabular-nums text-zinc-500 dark:text-zinc-400"
+                      dateTime={when ?? undefined}
+                      title={when ?? undefined}
+                    >
+                      {formatScheduleDt(when)}
+                    </time>
+                    <span className="rounded-md bg-white px-1.5 py-0.5 font-mono text-[11px] font-semibold text-zinc-800 shadow-sm dark:bg-zinc-950 dark:text-zinc-200">
+                      {ticker}
+                    </span>
+                    <span
+                      className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${statusBadgeClass(st.tone)}`}
+                    >
+                      {st.label}
+                    </span>
+                  </div>
+                  <p className="mt-1.5 text-xs font-medium leading-snug text-zinc-800 dark:text-zinc-200">
+                    {labelCrawlType(l.crawlType)}
+                  </p>
+                  {stats ? (
+                    <ul className="mt-2 flex flex-wrap gap-1.5">
+                      <li>
+                        <span className="inline-flex items-center gap-1 rounded-lg bg-emerald-500/10 px-2 py-1 text-[11px] text-emerald-900 dark:text-emerald-200">
+                          <span className="text-zinc-600 dark:text-zinc-400">Thêm mới</span>
+                          <span className="font-semibold tabular-nums">{stats.inserted}</span>
+                        </span>
+                      </li>
+                      <li>
+                        <span className="inline-flex items-center gap-1 rounded-lg bg-sky-500/10 px-2 py-1 text-[11px] text-sky-900 dark:text-sky-200">
+                          <span className="text-zinc-600 dark:text-zinc-400">Cập nhật</span>
+                          <span className="font-semibold tabular-nums">{stats.updated}</span>
+                        </span>
+                      </li>
+                      {stats.skipped !== undefined ? (
+                        <li>
+                          <span className="inline-flex items-center gap-1 rounded-lg bg-zinc-500/10 px-2 py-1 text-[11px] text-zinc-800 dark:text-zinc-200">
+                            <span className="text-zinc-600 dark:text-zinc-400">Bỏ qua</span>
+                            <span className="font-semibold tabular-nums">{stats.skipped}</span>
+                          </span>
+                        </li>
+                      ) : null}
+                    </ul>
+                  ) : freeText ? (
+                    <p
+                      className={
+                        st.tone === "failed"
+                          ? "mt-2 whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-red-700 dark:text-red-300"
+                          : "mt-2 whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-zinc-600 dark:text-zinc-400"
+                      }
+                    >
+                      {freeText}
+                    </p>
+                  ) : null}
+                </div>
+              );
+            })
+          )}
+        </div>
       </SectionCard>
 
       <SectionCard title="Lịch crawl tự động (VietStock)">
@@ -627,10 +742,33 @@ export default function StockSymbolManagementPage() {
         <button
           type="button"
           onClick={() => void onCrawlVietstock()}
-          className="mt-2 rounded-md bg-emerald-800 px-3 py-1.5 text-sm text-white dark:bg-emerald-700"
+          disabled={vietstockCrawling}
+          aria-busy={vietstockCrawling}
+          className="mt-2 inline-flex items-center justify-center gap-2 rounded-md bg-emerald-800 px-3 py-1.5 text-sm text-white disabled:pointer-events-none disabled:opacity-70 dark:bg-emerald-700"
         >
-          Crawl giá (ListPrice) &amp; lưu DB
+          {vietstockCrawling ? (
+            <>
+              <Loader2 className="h-4 w-4 shrink-0 animate-spin" strokeWidth={2} aria-hidden />
+              <span>Đang crawl…</span>
+            </>
+          ) : (
+            "Crawl giá (ListPrice) & lưu DB"
+          )}
         </button>
+        {vietstockCrawling ? (
+          <div
+            className="mt-2 flex gap-2 rounded-lg border border-emerald-500/25 bg-emerald-500/5 px-3 py-2 text-xs leading-relaxed text-zinc-700 dark:border-emerald-400/20 dark:bg-emerald-950/30 dark:text-zinc-300"
+            role="status"
+            aria-live="polite"
+          >
+            <Loader2
+              className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin text-emerald-700 dark:text-emerald-400"
+              strokeWidth={2}
+              aria-hidden
+            />
+            <span>{VIETSTOCK_CRAWL_PROGRESS_HINTS[crawlProgressStep]}</span>
+          </div>
+        ) : null}
         <p className="mt-2 text-xs text-amber-800 dark:text-amber-200">
           Chỉ crawl khi bạn có quyền sử dụng dữ liệu theo điều khoản VietStock / nguồn tương ứng. Công cụ chỉ hỗ trợ kỹ thuật, không thay thế giấy phép dữ liệu.
         </p>
