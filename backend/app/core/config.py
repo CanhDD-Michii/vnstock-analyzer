@@ -23,6 +23,13 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_model: str = "gpt-4o-mini"
 
+    # Crawler / VietStock (có thể ghi đè qua biến môi trường)
+    vietstock_finance_origin: str = "https://finance.vietstock.vn"
+    vietstock_list_price_path: str = "/data/GetStockDeal_ListPriceByTimeFrame"
+    vietstock_http_timeout_seconds: float = 90.0
+    crawl_scheduler_tick_seconds: int = 30
+    crawl_log_message_max_chars: int = 2000
+
     seed_admin_on_startup: bool = False  # bật qua SEED_ADMIN_ON_STARTUP=true
     admin_email: str = "admin@example.com"
     admin_password: str = "ChangeMe123!"
@@ -35,6 +42,14 @@ class Settings(BaseSettings):
     @property
     def openai_enabled(self) -> bool:
         return bool(self.openai_api_key and self.openai_api_key.strip())
+
+    @property
+    def vietstock_list_price_url(self) -> str:
+        origin = self.vietstock_finance_origin.rstrip("/")
+        path = self.vietstock_list_price_path
+        if not path.startswith("/"):
+            path = f"/{path}"
+        return f"{origin}{path}"
 
 
 settings = Settings()

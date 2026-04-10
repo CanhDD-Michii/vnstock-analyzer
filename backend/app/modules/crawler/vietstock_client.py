@@ -5,13 +5,24 @@ from typing import Any
 
 import httpx
 
+from app.core.config import settings
+from app.modules.crawler.constants import (
+    DEFAULT_VIETSTOCK_MAX_ROUNDS,
+    VIETSTOCK_API_MAX_PAGE_SIZE,
+    VIETSTOCK_STOCK_TRADING_STATS_PATH,
+)
 from app.modules.crawler.parser import parse_trading_date
 
-DEFAULT_VIETSTOCK_LIST_PRICE_URL = (
-    "https://finance.vietstock.vn/data/GetStockDeal_ListPriceByTimeFrame"
-)
 
-"""Chỉ các field được gửi trong body x-www-form-urlencoded (curl DevTools)."""
+def _default_list_price_url() -> str:
+    return settings.vietstock_list_price_url
+
+
+def _finance_origin() -> str:
+    return settings.vietstock_finance_origin.rstrip("/")
+
+
+# Chỉ các field được gửi trong body x-www-form-urlencoded (curl DevTools).
 _LIST_PRICE_FORM_KEYS = frozenset(
     {
         "stockCode",
@@ -24,27 +35,29 @@ _LIST_PRICE_FORM_KEYS = frozenset(
     }
 )
 
-_DEFAULT_HEADERS: dict[str, str] = {
-    "Accept": "application/json, text/javascript, */*; q=0.01",
-    "Accept-Language": "en-US,en;q=0.9,vi;q=0.8",
-    "Cache-Control": "no-cache",
-    "Connection": "keep-alive",
-    "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-    "Origin": "https://finance.vietstock.vn",
-    "Pragma": "no-cache",
-    "Referer": "https://finance.vietstock.vn/",
-    "Sec-Fetch-Dest": "empty",
-    "Sec-Fetch-Mode": "cors",
-    "Sec-Fetch-Site": "same-origin",
-    "User-Agent": (
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"
-    ),
-    "X-Requested-With": "XMLHttpRequest",
-    "sec-ch-ua": '"Not(A:Brand";v="8", "Chromium";v="144", "Google Chrome";v="144"',
-    "sec-ch-ua-mobile": "?0",
-    "sec-ch-ua-platform": '"Linux"',
-}
+def _default_vietstock_headers() -> dict[str, str]:
+    origin = _finance_origin()
+    return {
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "Accept-Language": "en-US,en;q=0.9,vi;q=0.8",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "Origin": origin,
+        "Pragma": "no-cache",
+        "Referer": f"{origin}/",
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-origin",
+        "User-Agent": (
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"
+        ),
+        "X-Requested-With": "XMLHttpRequest",
+        "sec-ch-ua": '"Not(A:Brand";v="8", "Chromium";v="144", "Google Chrome";v="144"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"Linux"',
+    }
 
 
 def _merge_vietstock_headers(
@@ -57,7 +70,7 @@ def _merge_vietstock_headers(
     extra: dict[str, str] = {}
     if isinstance(raw, dict):
         extra = {str(k): str(v) for k, v in raw.items()}
-    headers = {**_DEFAULT_HEADERS, **extra}
+    headers = {**_default_vietstock_headers(), **extra}
     if "Referer" not in extra and stock_code:
         tpl = metadata.get("referer_template")
         if isinstance(tpl, str) and tpl.strip():
@@ -66,7 +79,7 @@ def _merge_vietstock_headers(
             )
         else:
             headers["Referer"] = (
-                f"https://finance.vietstock.vn/{stock_code}/thong-ke-giao-dich.htm"
+                f"{_finance_origin()}/{stock_code}/{VIETSTOCK_STOCK_TRADING_STATS_PATH}"
             )
     return headers
 
@@ -178,19 +191,24 @@ def fetch_vietstock_list_price_backward(
     request_verification_token: str | None = None,
     extra_form: dict[str, str] | None = None,
     initial_to_date: date,
-    timeout: float = 90.0,
+    timeout: float | None = None,
 ) -> list[dict[str, Any]]:
     """POST ListPrice theo toDate, lùi: mỗi vòng min(TradingDate) − 1 ngày."""
     if not isinstance(metadata, dict):
         raise ValueError("crawlMetadata phải là object JSON")
-    url = str(metadata.get("url") or "").strip() or DEFAULT_VIETSTOCK_LIST_PRICE_URL
+    effective_timeout = (
+        timeout if timeout is not None else settings.vietstock_http_timeout_seconds
+    )
+    url = str(metadata.get("url") or "").strip() or _default_list_price_url()
     strat = metadata.get("crawl_strategy")
     if not isinstance(strat, dict):
         strat = {}
-    max_rounds = int(strat.get("max_rounds", 500))
-    page_size = int(strat.get("page_size") or metadata.get("page_size") or 20)
-    if page_size > 20:
-        page_size = 20
+    max_rounds = int(strat.get("max_rounds", DEFAULT_VIETSTOCK_MAX_ROUNDS))
+    page_size = int(
+        strat.get("page_size") or metadata.get("page_size") or VIETSTOCK_API_MAX_PAGE_SIZE
+    )
+    if page_size > VIETSTOCK_API_MAX_PAGE_SIZE:
+        page_size = VIETSTOCK_API_MAX_PAGE_SIZE
     if page_size < 1:
         page_size = 1
 
@@ -206,7 +224,12 @@ def fetch_vietstock_list_price_backward(
             extra_form=extra_form,
         )
         payload = _post_vietstock_json(
-            metadata, url, form, cookie=cookie, timeout=timeout, stock_code=stock_code
+            metadata,
+            url,
+            form,
+            cookie=cookie,
+            timeout=float(effective_timeout),
+            stock_code=stock_code,
         )
         batch = extract_list_price_results(payload)
         if not batch:

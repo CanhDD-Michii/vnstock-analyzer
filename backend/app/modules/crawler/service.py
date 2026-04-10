@@ -6,6 +6,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.db.models import CrawlLog, Stock, StockPriceHistory
 from app.modules.crawler.dates import today_vn
 from app.modules.crawler.parser import normalize_price_row
@@ -108,7 +109,7 @@ class CrawlerService:
             lg = self._db.get(CrawlLog, log_id)
             if lg:
                 lg.status = "failed"
-                lg.message = str(exc)[:2000]
+                lg.message = str(exc)[: settings.crawl_log_message_max_chars]
                 lg.finished_at = datetime.now(timezone.utc)
                 self._db.commit()
             raise

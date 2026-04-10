@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 
+from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.models import CrawlSchedule, Stock
 from app.db.session import SessionLocal
@@ -15,7 +16,6 @@ from app.modules.admin.service import AdminService
 
 logger = get_logger(__name__)
 
-_tick_seconds = 30
 _stop = threading.Event()
 _thread: threading.Thread | None = None
 
@@ -27,7 +27,10 @@ def start_crawl_scheduler() -> None:
     _stop.clear()
     _thread = threading.Thread(target=_run_loop, name="crawl-scheduler", daemon=True)
     _thread.start()
-    logger.info("Crawl scheduler started (tick=%ss)", _tick_seconds)
+    logger.info(
+        "Crawl scheduler started (tick=%ss)",
+        settings.crawl_scheduler_tick_seconds,
+    )
 
 
 def stop_crawl_scheduler() -> None:
@@ -36,7 +39,7 @@ def stop_crawl_scheduler() -> None:
 
 
 def _run_loop() -> None:
-    while not _stop.wait(_tick_seconds):
+    while not _stop.wait(settings.crawl_scheduler_tick_seconds):
         try:
             _tick()
         except Exception:
@@ -74,7 +77,7 @@ def _tick() -> None:
             except Exception as e:
                 logger.warning("Scheduled crawl failed ticker=%s: %s", ticker, e)
                 sched.last_run_status = "failed"
-                sched.last_run_message = str(e)[:2000]
+                sched.last_run_message = str(e)[: settings.crawl_log_message_max_chars]
             sched.last_run_at = now
             sched.next_run_at = now + timedelta(minutes=max(1, sched.interval_minutes))
             db.commit()
