@@ -142,7 +142,7 @@ def run_indicator_engine(price_bars: list[dict[str, Any]], symbol: str) -> dict[
     )
     levels_s = sanitize_levels_map(levels)
     risk_s = sanitize_risk_map(risk)
-    computed_bias = compute_computed_bias(int(scores["trend_score"]))
+    computed_bias = compute_computed_bias(int(scores["trend_score"]), indicators)
     confidence = calculate_confidence(scores, indicators)
     signal_summary = build_signal_summary(
         scores,

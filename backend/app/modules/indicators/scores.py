@@ -86,28 +86,38 @@ def compute_momentum_score(row: pd.Series) -> int:
 def compute_volume_score(row: pd.Series) -> int:
     """
     Volume score — §16.
-    Volume ratio, xác nhận tăng kèm volume, xu hướng volume, breakout có volume.
+    Nền theo volume_ratio (luôn trong [30, 100], không bao giờ 0); cộng thưởng xác nhận.
     """
-    score = 0.0
     vr = last_numeric(row, "volume_ratio")
+    if math.isnan(vr) or vr <= 0:
+        base = 50.0
+    elif vr < 0.5:
+        base = 30.0
+    elif vr < 1.0:
+        base = 50.0
+    else:
+        base = 70.0
+
+    bonus = 0.0
     daily_ret = last_numeric(row, "daily_return")
     vol = last_numeric(row, "volume")
     vol_ma = last_numeric(row, "volume_sma_20")
 
     if vr > 1.2:
-        score += 20
+        bonus += 15
     if vr > 1.5:
-        score += 15
+        bonus += 10
     if daily_ret > 0 and vol_ma > 0 and vol > vol_ma:
-        score += 20
+        bonus += 15
     vt = row.get("volume_trend")
     if vt is not None and not (isinstance(vt, float) and math.isnan(vt)) and float(vt) > 0:
-        score += 15
+        bonus += 10
     c = last_numeric(row, "close")
     hh20 = last_numeric(row, "highest_high_20")
     if hh20 > 0 and c >= hh20 and vr > 1.2:
-        score += 20
-    return int(_clip(score))
+        bonus += 10
+
+    return int(_clip(base + bonus, 30.0, 100.0))
 
 
 def compute_volatility_score(row: pd.Series) -> int:

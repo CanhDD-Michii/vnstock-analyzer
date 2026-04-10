@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useMemo, useState } from "react";
+import { useId, useMemo, useRef, useState } from "react";
 import {
   Area,
   AreaChart,
@@ -13,6 +13,8 @@ import {
   YAxis,
 } from "recharts";
 import type { PriceBar } from "@/types/stock";
+import { ChartFullscreenIconButton } from "@/components/stock/ChartFullscreenIconButton";
+import { useChartFullscreen } from "@/components/stock/useChartFullscreen";
 
 export type ChartRange = "1D" | "5D" | "1M" | "3M" | "6M" | "YTD" | "1Y" | "ALL";
 
@@ -98,39 +100,49 @@ export function PriceChart({
 }) {
   const [range, setRange] = useState<ChartRange>("3M");
   const gradId = useId().replace(/:/g, "");
+  const rootRef = useRef<HTMLDivElement>(null);
+  const { isFullscreen, toggleFullscreen } = useChartFullscreen(rootRef);
 
-  const { chartData, baseline, lastClose, change, changePct, up } = useMemo(() => {
-    const visible = filterBarsByRange(bars, range);
+  const visibleBars = useMemo(() => filterBarsByRange(bars, range), [bars, range]);
+
+  const { lastClose, change, changePct, up } = useMemo(() => {
+    const rows: ChartRow[] = visibleBars.map((b) => ({
+      date: b.tradingDate.slice(0, 10),
+      close: b.closePrice,
+      label: b.tradingDate,
+    }));
+    const last = rows[rows.length - 1]?.close ?? 0;
+    const prevClose = rows.length >= 2 ? rows[rows.length - 2]!.close : rows[0]?.close ?? 0;
+    const ch = last - prevClose;
+    const pct = prevClose !== 0 ? (ch / prevClose) * 100 : 0;
+    return { lastClose: last, change: ch, changePct: pct, up: ch >= 0 };
+  }, [visibleBars]);
+
+  const { chartData, baseline } = useMemo(() => {
+    if (visibleBars.length === 0) {
+      return { chartData: [] as ChartRow[], baseline: 0 };
+    }
     const sorted = sortBarsAsc(bars);
-    const rows: ChartRow[] = visible.map((b) => ({
+    const rows: ChartRow[] = visibleBars.map((b) => ({
       date: b.tradingDate.slice(0, 10),
       close: b.closePrice,
       label: b.tradingDate,
     }));
 
-    let baseline = rows[0]?.close ?? 0;
-    const firstBar = visible[0];
-    if (firstBar && sorted.length) {
+    let baselineVal = rows[0]?.close ?? 0;
+    const firstBar = visibleBars[0]!;
+    const i = visibleBars.findIndex((b) => b.tradingDate === firstBar.tradingDate);
+    if (i > 0) {
+      baselineVal = visibleBars[i - 1]!.closePrice;
+    } else {
       const fd = firstBar.tradingDate.slice(0, 10);
-      const i = sorted.findIndex((b) => b.tradingDate.slice(0, 10) === fd);
-      if (i > 0) baseline = sorted[i - 1]!.closePrice;
-      else baseline = firstBar.openPrice;
+      const si = sorted.findIndex((b) => b.tradingDate.slice(0, 10) === fd);
+      if (si > 0) baselineVal = sorted[si - 1]!.closePrice;
+      else baselineVal = firstBar.openPrice;
     }
 
-    const last = rows[rows.length - 1]?.close ?? 0;
-    const prevClose = rows.length >= 2 ? rows[rows.length - 2]!.close : baseline;
-    const ch = last - prevClose;
-    const pct = prevClose !== 0 ? (ch / prevClose) * 100 : 0;
-
-    return {
-      chartData: rows,
-      baseline,
-      lastClose: last,
-      change: ch,
-      changePct: pct,
-      up: ch >= 0,
-    };
-  }, [bars, range]);
+    return { chartData: rows, baseline: baselineVal };
+  }, [bars, visibleBars]);
 
   const stroke = up ? "#16a34a" : "#dc2626";
   const fillId = `priceFill-${gradId}`;
@@ -144,7 +156,14 @@ export function PriceChart({
   }
 
   return (
-    <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+    <div
+      ref={rootRef}
+      className={
+        isFullscreen
+          ? "flex h-screen max-h-[100dvh] w-screen flex-col overflow-hidden bg-white dark:bg-zinc-950"
+          : "overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950"
+      }
+    >
       <div className="flex flex-col gap-3 border-b border-zinc-100 px-4 py-3 dark:border-zinc-800 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0 text-center sm:text-left">
           {title ? (
@@ -167,25 +186,41 @@ export function PriceChart({
             {range === "1D" ? " · EOD: 1D ≈ 5 phiên gần nhất" : ""}
           </p>
         </div>
-        <div className="flex flex-wrap justify-center gap-1.5 sm:justify-end">
-          {RANGES.map(({ key, label }) => (
-            <button
-              key={key}
-              type="button"
-              onClick={() => setRange(key)}
-              className={`rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${
-                range === key
-                  ? "border-sky-500 bg-sky-50 text-sky-800 dark:border-sky-400 dark:bg-sky-950/50 dark:text-sky-200"
-                  : "border-zinc-200 bg-zinc-50 text-zinc-600 hover:border-zinc-300 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-400 dark:hover:border-zinc-600"
-              }`}
-            >
-              {label}
-            </button>
-          ))}
+        <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:justify-end">
+          <div className="flex flex-wrap items-center justify-center gap-1.5 sm:justify-end">
+            {RANGES.map(({ key, label }) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setRange(key)}
+                className={`rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${
+                  range === key
+                    ? "border-sky-500 bg-sky-50 text-sky-800 dark:border-sky-400 dark:bg-sky-950/50 dark:text-sky-200"
+                    : "border-zinc-200 bg-zinc-50 text-zinc-600 hover:border-zinc-300 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-400 dark:hover:border-zinc-600"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
-      <div className="h-80 w-full px-2 pb-2 pt-1">
+      <div
+        className={
+          isFullscreen
+            ? "relative min-h-0 w-full flex-1 px-2 pb-2 pt-1"
+            : "relative h-80 w-full px-2 pb-2 pt-1"
+        }
+      >
+        <div className="absolute right-2 top-2 z-20 sm:right-3">
+          <ChartFullscreenIconButton
+            isFullscreen={isFullscreen}
+            onToggle={() => {
+              void toggleFullscreen();
+            }}
+          />
+        </div>
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart data={chartData} margin={{ top: 12, right: 16, left: 4, bottom: 4 }}>
             <defs>

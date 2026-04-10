@@ -64,6 +64,7 @@ def build_fundamental_context(
     metrics_dict: dict[str, Any] | None,
     latest_financial_report: dict[str, Any] | None,
     fundamental_score_0_100: int | None,
+    key_metrics_row_present: bool = False,
 ) -> dict[str, Any]:
     present = _present_keys(metrics_dict)
     missing = _missing_keys(metrics_dict)
@@ -81,7 +82,7 @@ def build_fundamental_context(
             "description_excerpt": desc_excerpt,
         },
         "key_metrics_snapshot": metrics_dict,
-        "has_key_metrics_row": metrics_dict is not None,
+        "has_key_metrics_row": key_metrics_row_present,
         "latest_financial_report": latest_financial_report,
         "has_financial_report_row": latest_financial_report is not None,
         "fundamental_score_0_100": fundamental_score_0_100,

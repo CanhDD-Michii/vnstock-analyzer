@@ -110,33 +110,52 @@ def normalized_features_without_null(obj: Any) -> Any:
     return obj
 
 
-def compute_computed_bias(trend_score: int) -> str:
-    if trend_score >= 60:
-        return "bullish"
-    if trend_score <= 40:
-        return "bearish"
-    return "neutral"
+def compute_computed_bias(trend_score: int, indicators: dict[str, float]) -> str:
+    """
+    Xu hướng theo trend_score (55/45); MACD vs signal + RSI gán weak_bullish / weak_bearish
+    khi không đã bullish/bearish “đủ mạnh” từ trend.
+    """
+    ts = int(trend_score)
+    if ts >= 55:
+        bias = "bullish"
+    elif ts <= 45:
+        bias = "bearish"
+    else:
+        bias = "neutral"
+
+    macd = indicators.get("macd")
+    sig = indicators.get("macd_signal")
+    rsi = indicators.get("rsi_14")
+    if is_missing_value(macd) or is_missing_value(sig) or is_missing_value(rsi):
+        return bias
+
+    macd_f = float(macd)
+    sig_f = float(sig)
+    rsi_f = float(rsi)
+
+    if macd_f > sig_f and rsi_f > 50:
+        if bias == "bullish":
+            return "bullish"
+        return "weak_bullish"
+    if macd_f < sig_f and rsi_f < 50:
+        if bias == "bearish":
+            return "bearish"
+        return "weak_bearish"
+    return bias
 
 
 def calculate_confidence(scores: dict[str, int], indicators: dict[str, float]) -> int:
     """
-    0–100: đồng thuận giữa các score kỹ thuật, trừ rủi ro và bất đồng trend/momentum;
-    cộng nhẹ khi nhiều chỉ báo có giá trị hợp lệ trong snapshot.
+    0–100: trung bình có trọng số trend / momentum / volume / breakout;
+    volume tối đa 30% — một metric không “kill” toàn bộ tín hiệu.
+    (Tham số indicators giữ chữ ký API; có thể dùng sau cho boost độ đầy đủ snapshot.)
     """
-    t = int(scores.get("trend_score", 50))
-    m = int(scores.get("momentum_score", 50))
-    v = int(scores.get("volume_score", 50))
-    b = int(scores.get("breakout_score", 50))
-    r = int(scores.get("risk_score", 50))
-
-    core = (t + m + v + b) / 4.0
-    disagreement_penalty = min(28, abs(t - m) * 0.28)
-    risk_penalty = max(0, r - 42) * 0.22
-    present = sum(1 for x in indicators.values() if not is_missing_value(x))
-    data_boost = min(12, present)
-
-    raw = core - disagreement_penalty - risk_penalty + data_boost
-    return int(max(0, min(100, round(raw))))
+    t = float(int(scores.get("trend_score", 50)))
+    m = float(int(scores.get("momentum_score", 50)))
+    v = float(int(scores.get("volume_score", 50)))
+    br = float(int(scores.get("breakout_score", 50)))
+    conf = 0.25 * t + 0.25 * m + 0.30 * v + 0.20 * br
+    return int(max(0, min(100, round(conf))))
 
 
 def build_signal_summary(
@@ -154,12 +173,12 @@ def build_signal_summary(
     sig = float(indicators.get("macd_signal", MISSING_INDICATOR_VALUE))
 
     base_t = f"trend_score={ts}/100, state={primary_state}"
-    if ts >= 60:
+    if ts >= 55:
         trend_s = f"{base_t} → Xu hướng nghiêng tích cực theo engine."
-    elif ts <= 40:
+    elif ts <= 45:
         trend_s = f"{base_t} → Xu hướng nghiêng tiêu cực theo engine."
     else:
-        trend_s = f"{base_t} → Xu hướng trung tính (khoảng 41–59) theo engine."
+        trend_s = f"{base_t} → Xu hướng trung tính (khoảng 46–54) theo engine."
 
     mom_bits = [f"momentum_score={ms}/100"]
     if not is_missing_value(rsi):

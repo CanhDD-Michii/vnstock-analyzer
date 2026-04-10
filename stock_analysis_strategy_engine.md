@@ -392,6 +392,13 @@ Momentum cao không luôn đồng nghĩa là “an toàn”, vì có thể đã 
 - 5 phiên gần nhất volume cải thiện → +15
 - Breakout kèm volume → +20
 
+## 16.3 Triển khai trong code (`scores.py`)
+
+Điểm **luôn trong [30, 100]** (không để 0 — tránh “kill signal” khi volume_ratio thấp):
+
+- Nền theo `volume_ratio`: `< 0.5` → 30; `< 1.0` → 50; `≥ 1.0` → 70; thiếu / ≤ 0 / NaN → 50.
+- Cộng thưởng khi ratio cao, giá tăng kèm volume, `volume_trend` dương, breakout có volume (tương ứng §16.2), rồi clip lại vào [30, 100].
+
 ---
 
 # 17. Volatility Score
@@ -909,7 +916,7 @@ AI summary chỉ được phép dựa trên:
 - risk layer
 - `indicators` (giá trị tuyệt đối trên phiên cuối; xem §32.6 nếu là sentinel)
 - `normalized_features_for_ai` (feature đã chuẩn hóa / nhãn — xem §32.5; `null` được thay bằng chuỗi `"unavailable"` trong cây JSON)
-- `confidence` (0–100), `computed_bias` (`bullish` | `bearish` | `neutral`), `signal_summary` (tóm tắt trend/momentum/volume — xem §32.6)
+- `confidence` (0–100), `computed_bias` (`bullish` | `bearish` | `weak_bullish` | `weak_bearish` | `neutral`), `signal_summary` (tóm tắt trend/momentum/volume — xem §32.6)
 - `fundamental_metrics` (luôn là object, không `null` — `status`: `available` | `unavailable`)
 
 ## 32.3 Cấu trúc luận giải khuyến nghị
@@ -964,13 +971,36 @@ Mục tiêu: payload gửi AI / API **không chứa `null`** ở các khóa đã
 | **Giá đóng cửa / OHLC** | Luôn số thực từ nến cuối. |
 | **`latest_price.change` / `change_pct`** | Nếu thiếu phiên trước → fallback **0.0** (không `null`). |
 | **`normalized_features_for_ai`** | `null` trong cây → chuỗi **`"unavailable"`**. |
-| **`fundamental_metrics`** | Luôn object: có DB metrics → `{ …fields, "status": "available" }`; không có → `{ "status": "unavailable" }` (sau phân tích đầy đủ, service ghi đè từ pipeline mặc định). |
+| **`fundamental_metrics`** | Luôn object. **Pipeline thuần kỹ thuật** (`run_indicator_engine`): `{ "status": "unavailable" }`. **POST phân tích đầy đủ** (`analysis_history/service.py`): gộp snapshot 12 khóa số + `"status": "available"` khi có ít nhất một giá trị số; ngược lại `{ "status": "unavailable" }`. Chi tiết gộp: mục **32.6.1**. |
 | **`latest_financial_report`** | Bản ghi BCTC dict hoặc `{ "status": "unavailable" }`. |
-| **`confidence`** | Số nguyên **0–100**, từ `calculate_confidence(scores, indicators)` — đồng thuận score kỹ thuật, trừ rủi ro / bất đồng trend–momentum, cộng nhẹ khi nhiều chỉ báo có giá trị hợp lệ. |
-| **`computed_bias`** | `trend_score >= 60` → `bullish`; `<= 40` → `bearish`; còn lại → `neutral`. |
-| **`signal_summary`** | `{ "trend", "momentum", "volume", "overall_bias" }` — chuỗi tiếng Việt tóm tắt từ scores + chỉ báo (dùng trong prompt). |
+| **`confidence`** | Số nguyên **0–100**, từ `calculate_confidence(scores, indicators)` — **trung bình có trọng số**: `0.25×trend + 0.25×momentum + 0.30×volume + 0.20×breakout` (thang 0–100; volume tối đa 30% trọng số, tránh một chỉ số làm tụt toàn bộ độ tin cậy). |
+| **`computed_bias`** | Nền từ `trend_score`: `≥ 55` → `bullish`; `≤ 45` → `bearish`; khoảng 46–54 → `neutral`. Ghi đè: nếu MACD > signal và RSI(14) > 50 → `weak_bullish` (trừ khi đã `bullish`); nếu MACD < signal và RSI(14) < 50 → `weak_bearish` (trừ khi đã `bearish`). Thiếu MACD/signal/RSI (sentinel) → giữ bias từ trend. |
+| **`signal_summary`** | `{ "trend", "momentum", "volume", "overall_bias" }` — chuỗi tiếng Việt; nhánh trend dùng ngưỡng **55 / 45** và vùng trung tính **46–54** (khớp `computed_bias`). |
 
-Mã nguồn: `app/modules/indicators/engine_completeness.py`; gắn trong `run_indicator_engine` (`pipeline.py`). Phân tích đầy đủ: `analysis_history/service.py` ghi đè `fundamental_metrics` / `latest_financial_report`.
+### 32.6.1 Chỉ số cơ bản — 12 khóa và cách gộp (phân tích đầy đủ)
+
+Các khóa số kỳ vọng (đồng bộ `fundamental_context.FUNDAMENTAL_NUMERIC_KEYS` và prompt AI):
+
+`pe`, `pb`, `roe`, `roa`, `gross_margin`, `net_margin`, `debt_to_equity`, `current_ratio`, `quick_ratio`, `revenue_growth_yoy`, `profit_growth_yoy`, `eps_growth_yoy`.
+
+**Thứ tự ưu tiên:** giá trị từ bản ghi **`stock_key_metrics`** (mới nhất) **ghi đè** phần suy từ BCTC / giá. **Bổ sung từ BCTC** (`stock_financial_reports`, 2 kỳ gần nhất để YoY):
+
+- Từ kỳ mới nhất: `gross_margin`, `net_margin`, `roe`, `roa`, `debt_to_equity` (công thức từ doanh thu, LN gộp/ròng, vốn chủ, tài sản, nợ phải trả).
+- So kỳ mới vs kỳ liền trước: `revenue_growth_yoy`, `profit_growth_yoy` (LN ròng), `eps_growth_yoy`.
+- **`pe` / `pb`:** nếu thiếu trong key metrics → suy từ `latest_price.close` và `eps` / `bvps` của BCTC mới nhất (`close/eps`, `close/bvps` khi mẫu số > 0).
+
+**Hạn chế:** `current_ratio` và `quick_ratio` **không** suy từ schema BCTC hiện tại (thiếu TSCĐH/TSLĐH chi tiết) — chỉ có khi đã nhập trong `stock_key_metrics`. `metric_date` có trong object khi có bản ghi key metrics.
+
+Mã nguồn: `app/modules/indicators/fundamental_metrics_merge.py` (`build_merged_fundamental_metrics`), `app/modules/stocks/repository.py` (`get_recent_financial_reports`), `app/modules/indicators/fundamental_context.py` (`key_metrics_row_present` + `key_metrics_snapshot` = bản gộp).
+
+### 32.6.2 Chuẩn hóa JSON output OpenAI (parser + FE)
+
+Model đôi khi trả **object** cho `technical_analysis` / `fundamental_analysis` / … thay vì chuỗi → tránh hiển thị `[object Object]`.
+
+- **Backend:** `app/modules/ai_analysis/parser.py` — sau `json.loads`, ép `summary`, `fundamental_analysis`, `technical_analysis`, `conclusion` thành chuỗi; chuẩn hóa `risks`, `fundamental_data_gaps`, `fundamental_wishlist` thành mảng string.
+- **Frontend:** `frontend/components/stock/AiAnalysisDisplay.tsx` — `coerceAnalysisText` tương thích khi đọc `raw_ai_response_json` / payload cũ.
+
+Mã nguồn chung: `app/modules/indicators/engine_completeness.py`, `pipeline.py` (engine kỹ thuật). Phân tích đầy đủ: `analysis_history/service.py` gắn `fundamental_metrics` gộp, `fundamental_context`, gọi OpenAI và lưu kết quả đã parse.
 
 ---
 
@@ -1078,7 +1108,7 @@ Dưới đây là cấu trúc output khuyến nghị cho API.
 }
 ```
 
-*(Ghi chú: khi chạy phân tích đầy đủ với DB, `fundamental_metrics` có thể là `{ "metric_date": "…", "pe": …, …, "status": "available" }`; `latest_financial_report` tương tự object BCTC hoặc `{ "status": "unavailable" }` — không dùng `null` cho các khóa đó.)*
+*(Ghi chú: khi chạy phân tích đầy đủ với DB, `fundamental_metrics` là object gộp — xem **§32.6.1** — thường gồm `metric_date` (nếu có key metrics), 12 khóa số (mỗi khóa số hoặc `null`), và `"status": "available"`; `latest_financial_report` là object BCTC hoặc `{ "status": "unavailable" }`.)*
 
 ---
 
@@ -1133,12 +1163,15 @@ Làm tiếp:
 Trước khi gọi LLM:
 
 - Chuẩn hóa payload không `null` (sentinel, `fundamental_metrics.status`, `confidence`, `computed_bias`, `signal_summary`) — §32.6.
+- Gộp 12 chỉ số cơ bản (key metrics + BCTC + P/E–P/B suy từ giá) — §32.6.1; `fundamental_context` + prompt (`prompt_builder.py`).
 
-Sau đó:
+Sau phản hồi model:
 
-- summary generator
-- reason generator
-- risk notes generator
+- Parse JSON; ép field văn bản/object → string (`parser.py`) — §32.6.2.
+
+Sau đó (diễn giải):
+
+- summary / fundamental / technical / risks / conclusion / recommendation (theo schema đã định nghĩa).
 
 ---
 
@@ -1181,7 +1214,7 @@ app/
 - Mỗi strategy là 1 module riêng
 - Mỗi score là 1 module riêng
 - Có thể unit test độc lập từng phần
-- Payload engine trước LLM: không để `null` các khóa đã cam kết; sentinel / `fundamental_metrics.status` / `confidence` / `signal_summary` — triển khai thực tế: `app/modules/indicators/engine_completeness.py` + `pipeline.py` (§32.6).
+- Payload engine trước LLM: không để `null` các khóa đã cam kết; sentinel / `fundamental_metrics.status` / `confidence` / `computed_bias` / `signal_summary` — triển khai: `engine_completeness.py` + `pipeline.py` + gộp cơ bản `fundamental_metrics_merge.py` + service `analysis_history` (§32.6–32.6.1); chuẩn hóa output AI: `parser.py` (§32.6.2).
 
 ---
 

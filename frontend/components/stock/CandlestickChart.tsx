@@ -7,6 +7,8 @@ import {
   type ChartRange,
   filterBarsByRange,
 } from "@/components/stock/PriceChart";
+import { ChartFullscreenIconButton } from "@/components/stock/ChartFullscreenIconButton";
+import { useChartFullscreen } from "@/components/stock/useChartFullscreen";
 
 const RANGES: { key: ChartRange; label: string }[] = [
   { key: "1D", label: "1D" },
@@ -44,7 +46,9 @@ export function CandlestickChart({
   title?: string;
 }) {
   const [range, setRange] = useState<ChartRange>("3M");
+  const rootRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const { isFullscreen, toggleFullscreen } = useChartFullscreen(rootRef);
   const [size, setSize] = useState({ w: 640, h: 320 });
   const [hover, setHover] = useState<{
     bar: PriceBar;
@@ -63,14 +67,14 @@ export function CandlestickChart({
     return () => ro.disconnect();
   }, []);
 
-  const visible = useMemo(() => filterBarsByRange(bars, range), [bars, range]);
+  const displayed = useMemo(() => filterBarsByRange(bars, range), [bars, range]);
 
   const layout = useMemo(() => {
     const w = size.w;
     const h = size.h;
     const innerW = w - MARGIN.left - MARGIN.right;
     const innerH = h - MARGIN.top - MARGIN.bottom;
-    if (visible.length === 0 || innerW <= 0 || innerH <= 0) {
+    if (displayed.length === 0 || innerW <= 0 || innerH <= 0) {
       return {
         w,
         h,
@@ -88,7 +92,7 @@ export function CandlestickChart({
     }
     let minP = Infinity;
     let maxP = -Infinity;
-    for (const b of visible) {
+    for (const b of displayed) {
       minP = Math.min(minP, b.lowPrice);
       maxP = Math.max(maxP, b.highPrice);
     }
@@ -97,12 +101,12 @@ export function CandlestickChart({
     const hi = maxP + pad;
     const span = Math.max(hi - lo, 1e-9);
     const yScale = (p: number) => MARGIN.top + ((hi - p) / span) * innerH;
-    const gap = Math.max(1, Math.min(4, innerW / visible.length / 12));
-    const slotW = innerW / visible.length;
+    const gap = Math.max(1, Math.min(4, innerW / displayed.length / 12));
+    const slotW = innerW / displayed.length;
     const bodyW = Math.max(2, Math.min(slotW - gap, slotW * 0.72));
 
-    return { w, h, innerW, innerH, yScale, slotW, bodyW, gap, lo, hi, span, candles: visible };
-  }, [visible, size]);
+    return { w, h, innerW, innerH, yScale, slotW, bodyW, gap, lo, hi, span, candles: displayed };
+  }, [displayed, size]);
 
   const onSvgMove = useCallback(
     (e: MouseEvent<SVGSVGElement>) => {
@@ -118,23 +122,23 @@ export function CandlestickChart({
       pt.y = e.clientY;
       const p = pt.matrixTransform(ctm.inverse());
       const x = p.x;
-      if (x < MARGIN.left || x > layout.w - MARGIN.right || visible.length === 0) {
+      if (x < MARGIN.left || x > layout.w - MARGIN.right || displayed.length === 0) {
         setHover(null);
         return;
       }
       const rel = x - MARGIN.left;
       const idx = Math.min(
-        visible.length - 1,
+        displayed.length - 1,
         Math.max(0, Math.floor(rel / layout.slotW)),
       );
-      const bar = visible[idx]!;
+      const bar = displayed[idx]!;
       setHover({
         bar,
         px: e.clientX - cRect.left,
         py: e.clientY - cRect.top,
       });
     },
-    [layout.w, layout.slotW, visible],
+    [layout.w, layout.slotW, displayed],
   );
 
   if (bars.length === 0) {
@@ -149,7 +153,14 @@ export function CandlestickChart({
   const bear = "#dc2626";
 
   return (
-    <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+    <div
+      ref={rootRef}
+      className={
+        isFullscreen
+          ? "flex h-screen max-h-[100dvh] w-screen flex-col overflow-hidden bg-white dark:bg-zinc-950"
+          : "overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950"
+      }
+    >
       <div className="flex flex-col gap-3 border-b border-zinc-100 px-4 py-3 dark:border-zinc-800 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0 text-center sm:text-left">
           {title ? (
@@ -159,25 +170,42 @@ export function CandlestickChart({
             Mở · cao · thấp · đóng (OHLC) — mỗi cột là một phiên
           </p>
         </div>
-        <div className="flex flex-wrap justify-center gap-1.5 sm:justify-end">
-          {RANGES.map(({ key, label }) => (
-            <button
-              key={key}
-              type="button"
-              onClick={() => setRange(key)}
-              className={`rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${
-                range === key
-                  ? "border-amber-500 bg-amber-50 text-amber-900 dark:border-amber-400 dark:bg-amber-950/50 dark:text-amber-200"
-                  : "border-zinc-200 bg-zinc-50 text-zinc-600 hover:border-zinc-300 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-400 dark:hover:border-zinc-600"
-              }`}
-            >
-              {label}
-            </button>
-          ))}
+        <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:justify-end">
+          <div className="flex flex-wrap items-center justify-center gap-1.5 sm:justify-end">
+            {RANGES.map(({ key, label }) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setRange(key)}
+                className={`rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${
+                  range === key
+                    ? "border-amber-500 bg-amber-50 text-amber-900 dark:border-amber-400 dark:bg-amber-950/50 dark:text-amber-200"
+                    : "border-zinc-200 bg-zinc-50 text-zinc-600 hover:border-zinc-300 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-400 dark:hover:border-zinc-600"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
-      <div ref={containerRef} className="relative h-80 w-full px-2 pb-2 pt-1">
+      <div
+        ref={containerRef}
+        className={
+          isFullscreen
+            ? "relative min-h-0 w-full flex-1 px-2 pb-2 pt-1"
+            : "relative h-80 w-full px-2 pb-2 pt-1"
+        }
+      >
+        <div className="absolute right-2 top-2 z-20 sm:right-3">
+          <ChartFullscreenIconButton
+            isFullscreen={isFullscreen}
+            onToggle={() => {
+              void toggleFullscreen();
+            }}
+          />
+        </div>
         <svg
           width="100%"
           height="100%"

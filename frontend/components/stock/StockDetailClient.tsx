@@ -10,7 +10,7 @@ import { ROUTES } from "@/constants/routes";
 import { ApiClientError } from "@/services/api-client";
 import * as analysisApi from "@/services/analysis.service";
 import * as stockApi from "@/services/stock.service";
-import { formatAiRecommendationVi } from "@/lib/ai-recommendation";
+import { AiAnalysisDisplay } from "@/components/stock/AiAnalysisDisplay";
 import {
   normalizeMarketState,
   orderedScoreEntries,
@@ -227,19 +227,7 @@ export function StockDetailClient({
           <p className="mt-2 text-sm text-red-600 dark:text-red-400">{runErr}</p>
         )}
         {analysis?.ai != null && typeof analysis.ai === "object" && (
-          <div className="mt-4 space-y-3 text-sm">
-            <p className="whitespace-pre-wrap text-zinc-800 dark:text-zinc-200">
-              {String((analysis.ai as Record<string, unknown>).summary ?? "")}
-            </p>
-            <p className="text-xs text-zinc-500">
-              Khuyến nghị:{" "}
-              <span className="font-semibold text-zinc-800 dark:text-zinc-200">
-                {formatAiRecommendationVi(
-                  String((analysis.ai as Record<string, unknown>).recommendation ?? ""),
-                )}
-              </span>
-            </p>
-          </div>
+          <AiAnalysisDisplay ai={analysis.ai as Record<string, unknown>} />
         )}
       </SectionCard>
     </div>

@@ -28,6 +28,7 @@ from app.modules.analysis_history.repository import AnalysisHistoryRepository
 from app.modules.indicators.engine_completeness import is_missing_value
 from app.modules.indicators.fundamental import compute_fundamental_score
 from app.modules.indicators.fundamental_context import build_fundamental_context
+from app.modules.indicators.fundamental_metrics_merge import build_merged_fundamental_metrics
 from app.modules.indicators.pipeline import run_indicator_engine
 from app.modules.stocks.repository import StockRepository
 
@@ -217,20 +218,35 @@ class AnalysisHistoryService:
         ]
         engine = run_indicator_engine(bars, stock.ticker)
 
-        # Bước 3: lớp cơ bản (có thể rỗng)
+        # Bước 3: lớp cơ bản — gộp stock_key_metrics + BCTC (tỷ số, YoY) + P/E-P/B suy từ giá đóng
         metrics_row = self._stocks.get_latest_metrics(stock.id)
-        metrics_dict = self._stocks.metrics_to_dict(metrics_row) if metrics_row else None
-        fin_row = self._stocks.get_latest_financial_report(stock.id)
+        db_metrics = self._stocks.metrics_to_dict(metrics_row) if metrics_row else None
+        fin_rows = self._stocks.get_recent_financial_reports(stock.id, limit=2)
+        fin_row = fin_rows[0] if fin_rows else None
+        prev_fin_row = fin_rows[1] if len(fin_rows) > 1 else None
         fin_dict = self._stocks.financial_report_to_dict(fin_row) if fin_row else None
-        fund_score = compute_fundamental_score(metrics_dict)
+        prev_fin_dict = (
+            self._stocks.financial_report_to_dict(prev_fin_row) if prev_fin_row else None
+        )
+        lp = engine.get("latest_price") or {}
+        close_raw = lp.get("close")
+        latest_close = float(close_raw) if close_raw is not None else None
+
+        merged_metrics = build_merged_fundamental_metrics(
+            db_metrics=db_metrics,
+            latest_fin=fin_dict,
+            previous_fin=prev_fin_dict,
+            latest_close=latest_close,
+        )
+        fund_score = compute_fundamental_score(merged_metrics)
         engine["fundamental_score"] = fund_score
         engine["company"] = {
             "name": stock.company_name,
             "sector": stock.sector,
             "exchange": stock.exchange,
         }
-        if metrics_dict:
-            engine["fundamental_metrics"] = {**metrics_dict, "status": "available"}
+        if merged_metrics:
+            engine["fundamental_metrics"] = {**merged_metrics, "status": "available"}
         else:
             engine["fundamental_metrics"] = {"status": "unavailable"}
         engine["latest_financial_report"] = (
@@ -243,9 +259,10 @@ class AnalysisHistoryService:
             exchange=stock.exchange,
             sector=stock.sector,
             description=stock.description,
-            metrics_dict=metrics_dict,
+            metrics_dict=merged_metrics,
             latest_financial_report=fin_dict,
             fundamental_score_0_100=fund_score,
+            key_metrics_row_present=metrics_row is not None,
         )
 
         # Payload gửi AI: engine + bối cảnh cơ bản có cấu trúc (thiếu/đủ rõ ràng)
@@ -304,9 +321,9 @@ class AnalysisHistoryService:
             analysis_date=analysis_date,
             snapshot_price=lp.get("close"),
             snapshot_volume=lp.get("volume"),
-            snapshot_pe=_metric_float(metrics_dict.get("pe")) if metrics_dict else None,
-            snapshot_pb=_metric_float(metrics_dict.get("pb")) if metrics_dict else None,
-            snapshot_roe=_metric_float(metrics_dict.get("roe")) if metrics_dict else None,
+            snapshot_pe=_metric_float(merged_metrics.get("pe")) if merged_metrics else None,
+            snapshot_pb=_metric_float(merged_metrics.get("pb")) if merged_metrics else None,
+            snapshot_roe=_metric_float(merged_metrics.get("roe")) if merged_metrics else None,
             snapshot_rsi=_snapshot_indicator(ind.get("rsi_14")),
             snapshot_macd=_snapshot_indicator(ind.get("macd")),
             fundamental_score=fund_score,

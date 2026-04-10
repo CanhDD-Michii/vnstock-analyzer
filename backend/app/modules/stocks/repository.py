@@ -59,6 +59,19 @@ class StockRepository:
         )
         return self._db.scalar(q)
 
+    def get_recent_financial_reports(self, stock_id: int, limit: int = 2) -> list[StockFinancialReport]:
+        q = (
+            select(StockFinancialReport)
+            .where(StockFinancialReport.stock_id == stock_id)
+            .order_by(
+                desc(StockFinancialReport.fiscal_year),
+                desc(StockFinancialReport.fiscal_quarter),
+                desc(StockFinancialReport.created_at),
+            )
+            .limit(limit)
+        )
+        return list(self._db.scalars(q).all())
+
     def financial_report_to_dict(self, r: StockFinancialReport) -> dict[str, Any]:
         return {
             "report_type": r.report_type,
