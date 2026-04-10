@@ -4,6 +4,7 @@ import { ChevronRight, Loader2 } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { PageShell } from "@/components/common/PageShell";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SectionCard } from "@/components/ui/SectionCard";
 import { ROUTES } from "@/constants/routes";
 import { ADMIN_DEFAULT_STOCK_TICKER, createDefaultVietstockCrawlMetadata } from "@/constants/vietstock-defaults";
@@ -17,11 +18,49 @@ import * as adminApi from "@/services/admin.service";
 
 const PAGE_TITLE = "Quản lý mã chứng khoán";
 
+/** localStorage — chỉ máy này; cookie/token nhạy cảm, tránh XSS. */
+const VIETSTOCK_LS_COOKIE_KEY = "vnstock-analyzer.vietstock-manual-crawl.cookie";
+const VIETSTOCK_LS_TOKEN_KEY = "vnstock-analyzer.vietstock-manual-crawl.token";
+
 const VIETSTOCK_CRAWL_PROGRESS_HINTS = [
   "Đang crawl — server đang gọi VietStock (ListPrice) và có thể lùi nhiều ngày theo metadata.",
   "Vẫn đang chạy — với lịch sử dài, một lần crawl có thể mất vài phút; vui lòng không đóng trang.",
   "Nếu quá lâu: kiểm tra cookie và __RequestVerificationToken còn khớp phiên trình duyệt trên VietStock.",
 ] as const;
+
+/** Mẫu đúng POST /api/v1/admin/crawl/{ticker} — body `{ data: [...] }`, từng phần tử qua `normalize_price_row` (backend). */
+const INGEST_PRICE_JSON_EXAMPLE = `{
+  "data": [
+    {
+      "TradingDate": "2024-12-23",
+      "OpenPrice": 52.3,
+      "HighestPrice": 53.1,
+      "LowestPrice": 52.0,
+      "ClosePrice": 52.8,
+      "TotalVol": 15420000,
+      "Change": 0.5,
+      "PerChange": 0.96
+    },
+    {
+      "TradingDate": "/Date(1734998400000)/",
+      "OpenPrice": 52.8,
+      "HighestPrice": 53.4,
+      "LowestPrice": 51.9,
+      "ClosePrice": 52.15,
+      "TotalVol": 12035000,
+      "Change": -0.65,
+      "PerChange": -1.23
+    },
+    {
+      "trading_date": "2024-12-25",
+      "open_price": 52.0,
+      "high_price": 52.6,
+      "low_price": 51.4,
+      "close_price": 52.35,
+      "volume": 9850000
+    }
+  ]
+}`;
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -31,7 +70,7 @@ export default function StockSymbolManagementPage() {
   const { user, loading } = useAuth();
   const [stocks, setStocks] = useState<adminApi.StockAdminRow[]>([]);
   const [logs, setLogs] = useState<adminApi.CrawlLogRow[]>([]);
-  const [jsonText, setJsonText] = useState('{"data":[]}');
+  const [jsonText, setJsonText] = useState(INGEST_PRICE_JSON_EXAMPLE);
   const [ticker, setTicker] = useState(ADMIN_DEFAULT_STOCK_TICKER);
   const [crawlTicker, setCrawlTicker] = useState(ADMIN_DEFAULT_STOCK_TICKER);
   const [metaJson, setMetaJson] = useState(() =>
@@ -43,6 +82,11 @@ export default function StockSymbolManagementPage() {
   const [vsListToDate, setVsListToDate] = useState("");
   const [vsCookie, setVsCookie] = useState("");
   const [vsToken, setVsToken] = useState("");
+  const [persistedVietstockSecrets, setPersistedVietstockSecrets] = useState({
+    cookie: "",
+    token: "",
+  });
+  const [crawlLocalStoragePromptOpen, setCrawlLocalStoragePromptOpen] = useState(false);
   const [newTicker, setNewTicker] = useState("");
   const [newCompany, setNewCompany] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
@@ -54,6 +98,9 @@ export default function StockSymbolManagementPage() {
   const [schedCookie, setSchedCookie] = useState("");
   const [schedToken, setSchedToken] = useState("");
   const [schedSaving, setSchedSaving] = useState(false);
+  const [scheduleDeleteTicker, setScheduleDeleteTicker] = useState<string | null>(null);
+  const [clearSecretsDialogOpen, setClearSecretsDialogOpen] = useState(false);
+  const [confirmDialogBusy, setConfirmDialogBusy] = useState(false);
   const [vietstockCrawling, setVietstockCrawling] = useState(false);
   const [crawlProgressStep, setCrawlProgressStep] = useState(0);
 
@@ -66,6 +113,19 @@ export default function StockSymbolManagementPage() {
     setStocks(s);
     setLogs(l);
     setSchedules(sch);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const cookie = localStorage.getItem(VIETSTOCK_LS_COOKIE_KEY) ?? "";
+      const token = localStorage.getItem(VIETSTOCK_LS_TOKEN_KEY) ?? "";
+      setVsCookie(cookie);
+      setVsToken(token);
+      setPersistedVietstockSecrets({ cookie, token });
+    } catch {
+      /* private mode / chặn storage */
+    }
   }, []);
 
   useEffect(() => {
@@ -174,12 +234,25 @@ export default function StockSymbolManagementPage() {
     }
   }
 
-  async function onClearScheduleSecrets() {
-    setMsg(null);
+  function openClearSecretsDialog() {
     setErr(null);
     const t = schedTicker.trim().toUpperCase();
-    if (!t) return;
-    setSchedSaving(true);
+    if (!t) {
+      setErr("Chọn mã trước khi gỡ cookie/token.");
+      return;
+    }
+    setClearSecretsDialogOpen(true);
+  }
+
+  async function confirmClearScheduleSecrets() {
+    const t = schedTicker.trim().toUpperCase();
+    if (!t) {
+      setClearSecretsDialogOpen(false);
+      return;
+    }
+    setMsg(null);
+    setErr(null);
+    setConfirmDialogBusy(true);
     try {
       await adminApi.adminUpsertCrawlSchedule(t, {
         isEnabled: schedEnabled,
@@ -189,23 +262,28 @@ export default function StockSymbolManagementPage() {
       });
       setMsg(`Đã gỡ cookie/token lịch cho ${t}.`);
       await refreshData();
+      setClearSecretsDialogOpen(false);
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : "Thao tác thất bại");
     } finally {
-      setSchedSaving(false);
+      setConfirmDialogBusy(false);
     }
   }
 
-  async function onDeleteSchedule(ticker: string) {
-    if (!confirm(`Xóa lịch crawl cho ${ticker}?`)) return;
+  async function confirmDeleteSchedule() {
+    if (!scheduleDeleteTicker) return;
     setMsg(null);
     setErr(null);
+    setConfirmDialogBusy(true);
     try {
-      await adminApi.adminDeleteCrawlSchedule(ticker);
-      setMsg(`Đã xóa lịch ${ticker}.`);
+      await adminApi.adminDeleteCrawlSchedule(scheduleDeleteTicker);
+      setMsg(`Đã xóa lịch ${scheduleDeleteTicker}.`);
       await refreshData();
+      setScheduleDeleteTicker(null);
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : "Xóa lịch thất bại");
+    } finally {
+      setConfirmDialogBusy(false);
     }
   }
 
@@ -283,13 +361,51 @@ export default function StockSymbolManagementPage() {
     }
   }
 
-  async function onCrawlVietstock() {
+  function vietstockSecretsDifferFromPersisted(): boolean {
+    return (
+      vsCookie !== persistedVietstockSecrets.cookie ||
+      vsToken !== persistedVietstockSecrets.token
+    );
+  }
+
+  function onCrawlVietstockClick() {
     setMsg(null);
     setErr(null);
     if (!stocks.some((s) => s.ticker === crawlTicker)) {
       setErr("Chưa có mã để crawl.");
       return;
     }
+    if (vietstockSecretsDifferFromPersisted()) {
+      setCrawlLocalStoragePromptOpen(true);
+      return;
+    }
+    void executeVietstockCrawl();
+  }
+
+  function onCrawlPersistSaveAndRun() {
+    try {
+      localStorage.setItem(VIETSTOCK_LS_COOKIE_KEY, vsCookie);
+      localStorage.setItem(VIETSTOCK_LS_TOKEN_KEY, vsToken);
+    } catch {
+      setErr(
+        "Không ghi được localStorage. Bạn có thể chọn «Chỉ crawl» hoặc kiểm tra chế độ riêng tư / dung lượng trình duyệt.",
+      );
+      return;
+    }
+    setErr(null);
+    setPersistedVietstockSecrets({ cookie: vsCookie, token: vsToken });
+    setCrawlLocalStoragePromptOpen(false);
+    void executeVietstockCrawl();
+  }
+
+  function onCrawlPersistSkipAndRun() {
+    setErr(null);
+    setPersistedVietstockSecrets({ cookie: vsCookie, token: vsToken });
+    setCrawlLocalStoragePromptOpen(false);
+    void executeVietstockCrawl();
+  }
+
+  async function executeVietstockCrawl() {
     setVietstockCrawling(true);
     setCrawlProgressStep(0);
     const progressTimer = window.setInterval(() => {
@@ -525,7 +641,7 @@ export default function StockSymbolManagementPage() {
                       </button>
                       <button
                         type="button"
-                        onClick={() => void onDeleteSchedule(sc.ticker)}
+                        onClick={() => setScheduleDeleteTicker(sc.ticker)}
                         className="text-red-600 hover:underline dark:text-red-400"
                       >
                         Xóa
@@ -608,7 +724,7 @@ export default function StockSymbolManagementPage() {
             <button
               type="button"
               disabled={schedSaving || stocks.length === 0}
-              onClick={() => void onClearScheduleSecrets()}
+              onClick={openClearSecretsDialog}
               className="rounded-lg border border-zinc-300 px-4 py-2 text-sm dark:border-zinc-600"
             >
               Gỡ cookie/token đã lưu
@@ -721,11 +837,19 @@ export default function StockSymbolManagementPage() {
             Áp vào JSON
           </button>
         </div>
-        <p className="mt-2 text-xs text-zinc-500">
+        <p className="mt-2 text-xs leading-relaxed text-zinc-500 dark:text-zinc-400">
           Cookie / <code className="rounded bg-zinc-100 px-0.5 dark:bg-zinc-800">__RequestVerificationToken</code>{" "}
-          thường hết hạn; nên dán khi crawl, hoặc lưu trong{" "}
-          <code className="rounded bg-zinc-100 px-0.5 dark:bg-zinc-800">session</code> của JSON (cân nhắc bảo mật).
+          được tải từ <span className="font-medium text-zinc-600 dark:text-zinc-300">localStorage</span> trên trình duyệt
+          này (nếu đã lưu). Khi nội dung khác bản đã lưu, nút crawl sẽ hỏi có muốn cập nhật localStorage hay chỉ crawl một
+          lần. Dữ liệu nhạy cảm — tránh máy dùng chung; có thể kết hợp lưu trong{" "}
+          <code className="rounded bg-zinc-100 px-0.5 dark:bg-zinc-800">session</code> của JSON (metadata).
         </p>
+        {!vietstockSecretsDifferFromPersisted() &&
+        (vsCookie.length > 0 || vsToken.length > 0) ? (
+          <p className="mt-1 text-[11px] text-emerald-700 dark:text-emerald-400">
+            Đang khớp bản đã lưu trên trình duyệt — crawl sẽ không hỏi lưu lại cho đến khi bạn sửa ô.
+          </p>
+        ) : null}
         <textarea
           value={vsCookie}
           onChange={(e) => setVsCookie(e.target.value)}
@@ -741,7 +865,7 @@ export default function StockSymbolManagementPage() {
         />
         <button
           type="button"
-          onClick={() => void onCrawlVietstock()}
+          onClick={() => void onCrawlVietstockClick()}
           disabled={vietstockCrawling}
           aria-busy={vietstockCrawling}
           className="mt-2 inline-flex items-center justify-center gap-2 rounded-md bg-emerald-800 px-3 py-1.5 text-sm text-white disabled:pointer-events-none disabled:opacity-70 dark:bg-emerald-700"
@@ -799,10 +923,27 @@ export default function StockSymbolManagementPage() {
       </SectionCard>
 
       <SectionCard title="Ingest giá thủ công (JSON)">
-        <p className="mb-2 text-xs text-zinc-500">
-          Body: <code className="rounded bg-zinc-100 px-0.5 dark:bg-zinc-800">data[]</code> các object có{" "}
-          <code className="rounded bg-zinc-100 px-0.5 dark:bg-zinc-800">TradingDate</code> (/Date(ms)/ hoặc ISO) và
-          OHLCV (vd. <code className="rounded bg-zinc-100 px-0.5 dark:bg-zinc-800">OpenPrice</code>… hoặc OpenIndex…).
+        <p className="mb-2 text-xs leading-relaxed text-zinc-500 dark:text-zinc-400">
+          Gửi <code className="rounded bg-zinc-100 px-0.5 font-mono dark:bg-zinc-800">POST …/admin/crawl/{"{ticker}"}</code> với
+          body{" "}
+          <code className="rounded bg-zinc-100 px-0.5 font-mono dark:bg-zinc-800">{"{ \"data\": [ … ] }"}</code>. Mỗi phần tử
+          cần ngày (
+          <code className="rounded bg-zinc-100 px-0.5 font-mono dark:bg-zinc-800">TradingDate</code> hoặc{" "}
+          <code className="rounded bg-zinc-100 px-0.5 font-mono dark:bg-zinc-800">trading_date</code>, ISO{" "}
+          <code className="font-mono">YYYY-MM-DD</code> hoặc chuỗi{" "}
+          <code className="rounded bg-zinc-100 px-0.5 font-mono dark:bg-zinc-800">/Date(ms)/</code>) và đủ OHLC: kiểu
+          VietStock{" "}
+          <code className="rounded bg-zinc-100 px-0.5 font-mono dark:bg-zinc-800">OpenPrice</code>,{" "}
+          <code className="rounded bg-zinc-100 px-0.5 font-mono dark:bg-zinc-800">HighestPrice</code>,{" "}
+          <code className="rounded bg-zinc-100 px-0.5 font-mono dark:bg-zinc-800">LowestPrice</code>,{" "}
+          <code className="rounded bg-zinc-100 px-0.5 font-mono dark:bg-zinc-800">ClosePrice</code> (hoặc{" "}
+          <code className="rounded bg-zinc-100 px-0.5 font-mono dark:bg-zinc-800">open_price</code> …{" "}
+          <code className="rounded bg-zinc-100 px-0.5 font-mono dark:bg-zinc-800">close_price</code>, hoặc{" "}
+          <code className="rounded bg-zinc-100 px-0.5 font-mono dark:bg-zinc-800">OpenIndex</code>…). Khối lượng:{" "}
+          <code className="rounded bg-zinc-100 px-0.5 font-mono dark:bg-zinc-800">TotalVol</code> /{" "}
+          <code className="rounded bg-zinc-100 px-0.5 font-mono dark:bg-zinc-800">volume</code> (tuỳ chọn, mặc định 0).{" "}
+          <code className="rounded bg-zinc-100 px-0.5 font-mono dark:bg-zinc-800">Change</code>,{" "}
+          <code className="rounded bg-zinc-100 px-0.5 font-mono dark:bg-zinc-800">PerChange</code> tuỳ chọn.
         </p>
         <input
           value={ticker}
@@ -813,8 +954,9 @@ export default function StockSymbolManagementPage() {
         <textarea
           value={jsonText}
           onChange={(e) => setJsonText(e.target.value)}
-          rows={8}
-          className="w-full rounded-md border border-zinc-300 bg-white p-2 font-mono text-xs dark:border-zinc-700 dark:bg-zinc-900"
+          rows={16}
+          spellCheck={false}
+          className="w-full rounded-md border border-zinc-300 bg-white p-2 font-mono text-xs leading-relaxed dark:border-zinc-700 dark:bg-zinc-900"
         />
         <button
           type="button"
@@ -834,6 +976,91 @@ export default function StockSymbolManagementPage() {
           </p>
         )}
       </SectionCard>
+
+      <ConfirmDialog
+        open={crawlLocalStoragePromptOpen}
+        title="Lưu cookie / token vào trình duyệt?"
+        description={
+          <>
+            Giá trị trong hai ô đã thay đổi so với bản lưu trong{" "}
+            <span className="font-medium text-zinc-700 dark:text-zinc-300">localStorage</span> (hoặc bạn chưa từng lưu).
+            Bạn có muốn <span className="font-medium">ghi lại</span> để lần sau tự điền không?
+            <span className="mt-2 block text-zinc-500 dark:text-zinc-500">
+              «Chỉ crawl» vẫn gửi request với nội dung hiện tại nhưng không ghi localStorage (và sẽ không hỏi lại cho đến
+              khi bạn sửa ô).
+            </span>
+          </>
+        }
+        cancelLabel="Hủy"
+        confirmLabel="Lưu và crawl"
+        variant="default"
+        pending={false}
+        secondaryAction={{
+          label: "Chỉ crawl, không lưu",
+          onClick: () => {
+            if (vietstockCrawling) return;
+            onCrawlPersistSkipAndRun();
+          },
+        }}
+        onCancel={() => {
+          if (vietstockCrawling) return;
+          setCrawlLocalStoragePromptOpen(false);
+        }}
+        onConfirm={() => {
+          if (vietstockCrawling) return;
+          onCrawlPersistSaveAndRun();
+        }}
+      />
+
+      <ConfirmDialog
+        open={scheduleDeleteTicker !== null}
+        title="Xóa lịch crawl?"
+        description={
+          scheduleDeleteTicker ? (
+            <>
+              Xóa hoàn toàn lịch crawl tự động cho mã{" "}
+              <span className="font-semibold text-zinc-900 dark:text-zinc-100">
+                {scheduleDeleteTicker}
+              </span>
+              . Crawl định kỳ sẽ dừng cho mã này cho đến khi bạn tạo lịch mới. Thao tác không thể hoàn tác.
+            </>
+          ) : null
+        }
+        confirmLabel="Xóa lịch"
+        cancelLabel="Hủy"
+        variant="danger"
+        pending={confirmDialogBusy}
+        onCancel={() => {
+          if (!confirmDialogBusy) setScheduleDeleteTicker(null);
+        }}
+        onConfirm={() => void confirmDeleteSchedule()}
+      />
+
+      <ConfirmDialog
+        open={clearSecretsDialogOpen}
+        title="Gỡ cookie và token đã lưu?"
+        description={
+          <>
+            Xóa cookie VietStock và{" "}
+            <code className="rounded bg-zinc-100 px-0.5 font-mono text-xs dark:bg-zinc-800">
+              __RequestVerificationToken
+            </code>{" "}
+            đang lưu cho lịch mã{" "}
+            <span className="font-semibold text-zinc-900 dark:text-zinc-100">
+              {schedTicker.trim().toUpperCase() || "—"}
+            </span>
+            . Lịch vẫn giữ chu kỳ và trạng thái bật/tắt; crawl định kỳ có thể thất bại cho đến khi nhập bí mật mới.
+          </>
+        }
+        confirmLabel="Gỡ bí mật"
+        cancelLabel="Hủy"
+        variant="danger"
+        pending={confirmDialogBusy}
+        onCancel={() => {
+          if (!confirmDialogBusy) setClearSecretsDialogOpen(false);
+        }}
+        onConfirm={() => void confirmClearScheduleSecrets()}
+      />
     </PageShell>
   );
 }

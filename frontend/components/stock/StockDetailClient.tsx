@@ -4,6 +4,7 @@ import { ChevronLeft } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { SectionCard } from "@/components/ui/SectionCard";
+import { CandlestickChart } from "@/components/stock/CandlestickChart";
 import { PriceChart } from "@/components/stock/PriceChart";
 import { ROUTES } from "@/constants/routes";
 import { ApiClientError } from "@/services/api-client";
@@ -107,6 +108,13 @@ export function StockDetailClient({
           <span className="text-zinc-400 dark:text-zinc-500"> · </span>
           {initialDetail.sector || "—"}
         </p>
+      </SectionCard>
+      <SectionCard title="Biểu đồ nến (OHLC)">
+        {prices.length === 0 ? (
+          <p className="text-sm text-zinc-500">Chưa có dữ liệu giá.</p>
+        ) : (
+          <CandlestickChart bars={prices} title={ticker} />
+        )}
       </SectionCard>
       <SectionCard title="Biểu đồ giá đóng cửa">
         {prices.length === 0 ? (
