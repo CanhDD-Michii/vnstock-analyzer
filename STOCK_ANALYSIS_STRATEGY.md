@@ -35,7 +35,7 @@
 | Giá | OHLCV, % change, (value, cap nếu có) |
 | Cơ bản | BCTC, EPS, ROE, P/E, tăng trưởng… |
 | Hồ sơ DN | Ticker, ngành, mô tả, sàn |
-| Tin / sự kiện | KQKD, cổ tức, M&A… |
+| Tin / sự kiện | KQKD, cổ tức, M&A… *(lớp mở rộng — chưa có pipeline ingest tin trong repo hiện tại)* |
 | Snapshot phân tích | Điểm số, AI output, lưu lịch sử |
 
 Chỉ có giá **chưa đủ** cho phân tích đầu tư đầy đủ.
@@ -43,7 +43,7 @@ Chỉ có giá **chưa đủ** cho phân tích đầu tư đầy đủ.
 ---
 
 ## 4. Pipeline
-1. Thu thập (crawl + chuẩn hóa) → 2. Chỉ báo & metric → 3. Fundamental / Technical / Risk score → 4. **Engine JSON đầy đủ** (không `null` cho khóa đã cam kết — xem dưới) → 5. **Gói cho OpenAI** (`engine` + `fundamental_context` trong payload) → 6. Lưu `analysis_results`.
+1. Thu thập (crawl + chuẩn hóa) → 2. Chỉ báo & metric → 3. Fundamental / Technical / Risk score → 4. **Engine JSON đầy đủ** (các khóa cấp trên đã cam kết luôn có; chi tiết `null` từng chỉ số cơ bản — §32.6) → 5. **Gói cho OpenAI** (`engine` + `fundamental_context` trong payload) → 6. Lưu `analysis_results`.
 
 **Góc nhìn:** (A) Cơ bản — tăng trưởng, biên, nợ, định giá. (B) Kỹ thuật — xu hướng, RSI/MACD, volume, hỗ trợ/kháng cự. (C) Rủi ro — biến động, nợ, sự kiện.
 
@@ -60,7 +60,7 @@ Chỉ có giá **chưa đủ** cho phân tích đầu tư đầy đủ.
 ## 5. Stack & kiến trúc
 Next.js → FastAPI → MySQL; OpenAI; Docker. Crawler/scheduler nền.
 
-**Module:** Auth, Stock, **Crawler** (27.3.1), Indicator, AI Analysis, History, Admin.
+**Module (theo mã):** Auth, Stock, Crawler/VietStock ingest (admin), Indicator (`app/modules/indicators`), AI Analysis (`app/modules/ai_analysis`), History (`analysis_history`), Admin.
 
 ### 5.1 Crawl giá VietStock (triển khai)
 - **Chỉ cổ phiếu:** `POST …/data/GetStockDeal_ListPriceByTimeFrame` — body chỉ gồm `stockCode`, `timeFrame`, `toDate`, `page`, `pageSize`, `languageID`, `__RequestVerificationToken` (backend lọc field khác).
@@ -71,7 +71,7 @@ Next.js → FastAPI → MySQL; OpenAI; Docker. Crawler/scheduler nền.
 - **`page_size`:** API tối đa **20**; backend clamp **>20→20**, **<1→1**.
 - **Ingest ListPrice:** `skip_locked_historical`: đã có bản ghi và ngày **≠ hôm nay VN** → skip; hôm nay → upsert; ngày mới → insert; trùng nội dung → skip. Log: `inserted`, `updated`, `skipped`.
 - **Lịch:** `crawl_schedules` gọi cùng `trigger_vietstock_crawl`; cookie/token trên lịch.
-- **API:** `POST .../admin/crawl/{ticker}` (ingest JSON); `POST .../admin/crawl/vietstock/{ticker}` (VietStock theo metadata).
+- **API (cần JWT admin, prefix mặc định):** `POST /api/v1/admin/crawl/{ticker}` (ingest JSON body); `POST /api/v1/admin/crawl/vietstock/{ticker}` (VietStock theo body/metadata).
 
 ---
 
@@ -89,8 +89,8 @@ Mapping giá: `TradingDate`→`trading_date`; ListPrice `OpenPrice`… hoặc ch
 
 ---
 
-## 7. API (gợi ý path)
-Auth: register, login, me. Stocks: list, `{ticker}`, prices, metrics, technicals. Analysis: POST analyze, history. Admin: users, stocks, crawl, crawl/logs, analysis.
+## 7. API (prefix thực tế `/api/v1`)
+Auth: `POST /auth/register`, `POST /auth/login`, `GET /auth/me`. Stocks: `GET /stocks`, `GET /stocks/{ticker}`, `GET /stocks/{ticker}/prices`, `GET /stocks/{ticker}/metrics`, `GET /stocks/{ticker}/technicals`. Analysis: `POST /analysis/{ticker}`, `GET /analysis/history`, `GET /analysis/history/{result_id}`. Admin: `GET/PATCH /admin/users`, `GET/POST/PATCH /admin/stocks`, `POST /admin/crawl/...`, `GET /admin/crawl/logs`, `GET /admin/analysis`, v.v.
 
 ---
 

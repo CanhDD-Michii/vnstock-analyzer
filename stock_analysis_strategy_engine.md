@@ -347,7 +347,9 @@ Các score cần có:
 - Slope SMA50 dương → +10
 - Giá gần đỉnh 20 phiên → +15
 
-## 14.3 Ngưỡng đánh giá
+## 14.3 Ngưỡng đánh giá (đọc kết quả / tài liệu)
+
+*(Các dải sau dùng để **diễn giải** `trend_score`; **phân loại state** trong `market_state.py` dùng ngưỡng riêng — xem §21 / mã `classify_market_state`.)*
 
 - `80–100`: Xu hướng rất mạnh
 - `60–79`: Xu hướng tích cực
@@ -384,7 +386,9 @@ Momentum cao không luôn đồng nghĩa là “an toàn”, vì có thể đã 
 
 Đánh giá mức độ xác nhận của dòng tiền.
 
-## 16.2 Gợi ý chấm điểm
+## 16.2 Gợi ý chấm điểm (checklist thiết kế)
+
+*(Đây là gợi ý ban đầu trong tài liệu; **mã chạy thực tế** dùng logic §16.3 trong `scores.py` — nền theo `volume_ratio` + thưởng + clip.)*
 
 - Volume ratio > 1.2 → +20
 - Volume ratio > 1.5 → +15 thêm
@@ -963,7 +967,9 @@ Triển khai: `app/modules/indicators/ai_payload_features.py` (`build_normalized
 
 ## 32.6 Độ đầy đủ payload engine (Data completeness)
 
-Mục tiêu: payload gửi AI / API **không chứa `null`** ở các khóa đã cam kết, để model không diễn giải kiểu “thiếu dữ liệu” chung chung.
+Mục tiêu: các **khóa cấp trên** đã cam kết luôn có mặt với kiểu ổn định (object `fundamental_metrics` / `latest_financial_report`, số hoặc sentinel cho chỉ báo), để model không diễn giải kiểu “thiếu payload” chung chung.
+
+**Lưu ý JSON `null`:** với `fundamental_metrics.status === "available"`, **từng trong 12 khóa số** có thể là `null` nếu không đủ dữ liệu để tính — điều này **đúng với** `build_merged_fundamental_metrics`. Các khóa như `fundamental_metrics` / `latest_financial_report` **không** được bỏ hẳn (luôn là object).
 
 | Thành phần | Quy ước |
 |------------|---------|
@@ -1008,14 +1014,15 @@ Mã nguồn chung: `app/modules/indicators/engine_completeness.py`, `pipeline.py
 
 ## 33.1 Bổ sung so với mẫu cũ
 
-Các khóa **bắt buộc** thêm (luôn có mặt): `fundamental_metrics`, `confidence`, `computed_bias`, `signal_summary`. `indicators` / `levels` / `risk` dùng số thực; chỗ thiếu dùng sentinel như §32.6 (trong ví dụ dưới vẫn dùng số “đẹp” cho dễ đọc).
+Các khóa **bắt buộc** thêm (luôn có mặt trong `run_indicator_engine`): `computed_at` (ISO UTC), `fundamental_metrics`, `confidence`, `computed_bias`, `signal_summary`. `indicators` / `levels` / `risk` dùng số thực hoặc sentinel như §32.6 (ví dụ JSON dùng số minh họa).
 
-Dưới đây là cấu trúc output khuyến nghị cho API.
+Dưới đây là **ví dụ cấu trúc** gần với `run_indicator_engine` (`pipeline.py`). Giá trị số mang tính minh họa; **`active_strategies`**: chuỗi `reason` / `risk_notes` sinh từ `strategies_engine.py` theo `primary_state` (ví dụ `Breakout Setup` → một mục `Breakout Detection`). Không có trường `ai_summary` trong output engine — AI nằm ở lớp phân tích / `analysis_results`.
 
 ```json
 {
   "symbol": "ABC",
   "analysis_date": "2026-04-09",
+  "computed_at": "2026-04-09T10:00:00+00:00",
   "latest_price": {
     "open": 25.1,
     "high": 25.8,
@@ -1057,7 +1064,7 @@ Dưới đây là cấu trúc output khuyến nghị cho API.
   },
   "state": {
     "primary_state": "Breakout Setup",
-    "description": "Giá đang tiến sát vùng kháng cự sau giai đoạn tích lũy ngắn hạn."
+    "description": "Giá áp sát kháng cự, breakout score khá; theo dõi xác nhận thanh khoản."
   },
   "levels": {
     "nearest_support": 24.8,
@@ -1070,19 +1077,10 @@ Dưới đây là cấu trúc output khuyến nghị cho API.
       "name": "Breakout Detection",
       "signal": "Watch Closely",
       "confidence": 76,
-      "reason": "Giá đang tiến sát vùng kháng cự 20 phiên, thanh khoản cải thiện và biên độ siết lại.",
+      "reason": "Giá tiến gần kháng cự 20 phiên, biên độ Bollinger và volume được theo dõi.",
       "risk_notes": [
-        "Volume vẫn chưa đủ mạnh để xác nhận hoàn toàn breakout",
-        "Cần theo dõi phản ứng tại vùng 25.9"
-      ]
-    },
-    {
-      "name": "Trend Following",
-      "signal": "Positive",
-      "confidence": 71,
-      "reason": "Xu hướng ngắn hạn vẫn duy trì tích cực khi giá nằm trên MA20 và MA50.",
-      "risk_notes": [
-        "Nếu giá mất MA20, độ mạnh xu hướng sẽ suy giảm"
+        "Breakout yếu nếu đóng cửa không giữ được gần đỉnh phiên",
+        "False breakout nếu volume không xác nhận"
       ]
     }
   ],
@@ -1103,8 +1101,7 @@ Dưới đây là cấu trúc output khuyến nghị cho API.
     "momentum": "momentum_score=72/100, RSI_14=63.40, MACD>signal → Động lượng mạnh theo điểm engine.",
     "volume": "volume_score=81/100, volume_ratio=1.34 → Thanh khoản cao / xác nhận tương đối tốt (theo payload).",
     "overall_bias": "bullish"
-  },
-  "ai_summary": "Cổ phiếu đang trong giai đoạn chuẩn bị breakout sau nhịp tích lũy ngắn hạn..."
+  }
 }
 ```
 
@@ -1162,7 +1159,7 @@ Làm tiếp:
 
 Trước khi gọi LLM:
 
-- Chuẩn hóa payload không `null` (sentinel, `fundamental_metrics.status`, `confidence`, `computed_bias`, `signal_summary`) — §32.6.
+- Chuẩn hóa payload: sentinel, luôn có `fundamental_metrics` / `latest_financial_report` dạng object, `confidence`, `computed_bias`, `signal_summary` — §32.6 (12 số trong `fundamental_metrics` có thể `null` từng khóa).
 - Gộp 12 chỉ số cơ bản (key metrics + BCTC + P/E–P/B suy từ giá) — §32.6.1; `fundamental_context` + prompt (`prompt_builder.py`).
 
 Sau phản hồi model:
@@ -1214,7 +1211,7 @@ app/
 - Mỗi strategy là 1 module riêng
 - Mỗi score là 1 module riêng
 - Có thể unit test độc lập từng phần
-- Payload engine trước LLM: không để `null` các khóa đã cam kết; sentinel / `fundamental_metrics.status` / `confidence` / `computed_bias` / `signal_summary` — triển khai: `engine_completeness.py` + `pipeline.py` + gộp cơ bản `fundamental_metrics_merge.py` + service `analysis_history` (§32.6–32.6.1); chuẩn hóa output AI: `parser.py` (§32.6.2).
+- Payload engine trước LLM: các khóa cấp trên đã cam kết (§32.6); sentinel; `fundamental_metrics` luôn object — triển khai: `engine_completeness.py` + `pipeline.py` + `fundamental_metrics_merge.py` + `analysis_history/service.py` (§32.6–32.6.1); chuẩn hóa output AI: `parser.py` (§32.6.2).
 
 ---
 
