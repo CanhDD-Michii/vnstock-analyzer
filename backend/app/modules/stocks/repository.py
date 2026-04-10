@@ -5,7 +5,7 @@ from typing import Any
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
-from app.db.models import Stock, StockKeyMetrics, StockPriceHistory
+from app.db.models import Stock, StockFinancialReport, StockKeyMetrics, StockPriceHistory
 
 
 class StockRepository:
@@ -45,6 +45,37 @@ class StockRepository:
             .limit(1)
         )
         return self._db.scalar(q)
+
+    def get_latest_financial_report(self, stock_id: int) -> StockFinancialReport | None:
+        q = (
+            select(StockFinancialReport)
+            .where(StockFinancialReport.stock_id == stock_id)
+            .order_by(
+                desc(StockFinancialReport.fiscal_year),
+                desc(StockFinancialReport.fiscal_quarter),
+                desc(StockFinancialReport.created_at),
+            )
+            .limit(1)
+        )
+        return self._db.scalar(q)
+
+    def financial_report_to_dict(self, r: StockFinancialReport) -> dict[str, Any]:
+        return {
+            "report_type": r.report_type,
+            "fiscal_year": r.fiscal_year,
+            "fiscal_quarter": r.fiscal_quarter,
+            "revenue": float(r.revenue) if r.revenue is not None else None,
+            "gross_profit": float(r.gross_profit) if r.gross_profit is not None else None,
+            "operating_profit": float(r.operating_profit) if r.operating_profit is not None else None,
+            "net_profit": float(r.net_profit) if r.net_profit is not None else None,
+            "eps": float(r.eps) if r.eps is not None else None,
+            "bvps": float(r.bvps) if r.bvps is not None else None,
+            "total_assets": float(r.total_assets) if r.total_assets is not None else None,
+            "total_liabilities": float(r.total_liabilities) if r.total_liabilities is not None else None,
+            "equity": float(r.equity) if r.equity is not None else None,
+            "operating_cash_flow": float(r.operating_cash_flow) if r.operating_cash_flow is not None else None,
+            "free_cash_flow": float(r.free_cash_flow) if r.free_cash_flow is not None else None,
+        }
 
     def create_stock(
         self,

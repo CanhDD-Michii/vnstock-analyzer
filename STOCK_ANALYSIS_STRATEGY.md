@@ -43,13 +43,17 @@ Chỉ có giá **chưa đủ** cho phân tích đầu tư đầy đủ.
 ---
 
 ## 4. Pipeline
-1. Thu thập (crawl + chuẩn hóa) → 2. Chỉ báo & metric → 3. Fundamental / Technical / Risk score → 4. Payload cho OpenAI → 5. Lưu `analysis_results`.
+1. Thu thập (crawl + chuẩn hóa) → 2. Chỉ báo & metric → 3. Fundamental / Technical / Risk score → 4. **Engine JSON đầy đủ** (không `null` cho khóa đã cam kết — xem dưới) → 5. **Gói cho OpenAI** (`engine` + `fundamental_context` trong payload) → 6. Lưu `analysis_results`.
 
 **Góc nhìn:** (A) Cơ bản — tăng trưởng, biên, nợ, định giá. (B) Kỹ thuật — xu hướng, RSI/MACD, volume, hỗ trợ/kháng cự. (C) Rủi ro — biến động, nợ, sự kiện.
 
 **Điểm 0–100 (gợi ý):** Fundamental: growth, ROE, margin, nợ, valuation. Technical: trend, RSI, MACD, volume. Risk: càng cao càng rủi ro (hoặc đảo thành safety).
 
-**OpenAI:** chỉ diễn giải số đã tính; output JSON gợi ý: `summary`, `fundamental_analysis`, `technical_analysis`, `risks[]`, `conclusion`, `recommendation` (BUY/WATCH/HOLD/AVOID). Prompt: không bịa số, không lời khuyên tuyệt đối.
+**`normalized_features_for_ai` (backend):** cùng phiên cuối với `indicators`, nhiều mục % / 0–1 / nhãn; `null` nội bộ được thay bằng `"unavailable"` trước khi serialize. Chi tiết: `stock_analysis_strategy_engine.md` **§32.5–32.6**.
+
+**Độ đầy đủ engine (Data completeness):** `indicators`, `levels`, vùng giá trong `risk` dùng sentinel số rất âm (≈ −10⁷) khi không có snapshot; `latest_price.change`/`change_pct` thiếu → `0.0`; `fundamental_metrics` luôn object (`status`: `available` | `unavailable`); `latest_financial_report` tương tự; thêm `confidence` (0–100), `computed_bias` (bullish/bearish/neutral), `signal_summary` (4 chuỗi). Mã: `engine_completeness.py`, `pipeline.py`, service phân tích ghi đè cơ bản/BCTC. Chi tiết: **§32.6** và **§33.1** trong `stock_analysis_strategy_engine.md`.
+
+**OpenAI:** chỉ diễn giải số đã tính (gồm `confidence`, `computed_bias`, `signal_summary`); output JSON gợi ý: `summary`, `fundamental_analysis`, `technical_analysis`, `risks[]`, `conclusion`, `recommendation`, `fundamental_data_gaps`, `fundamental_wishlist`. Prompt: không bịa số; fundamental khi `status=unavailable` dùng câu cố định theo template (không “thiếu dữ liệu” chung chung).
 
 ---
 

@@ -1,8 +1,12 @@
 """
-Xây dựng prompt cho lớp AI Interpretation (engine doc §32 + STOCK_ANALYSIS_STRATEGY).
+AI Interpretation Prompt Builder (Production-grade)
 
-- System prompt: khóa vai trò, cấm bịa số, cấm khuyến nghị tuyệt đối.
-- User template: nhét JSON engine đã tính; AI chỉ diễn giải có cấu trúc.
+Mục tiêu:
+- AI chỉ DIỄN GIẢI (không phân tích thô)
+- Không hallucination
+- Có bias rõ ràng (tránh neutral vô nghĩa)
+- Lập luận sâu (indicator → meaning → action)
+- Có short-term / long-term
 """
 
 from __future__ import annotations
@@ -10,7 +14,10 @@ from __future__ import annotations
 import json
 from typing import Any
 
-# Mã khuyến nghị trong JSON (UI/FE dịch sang tiếng Việt) — đồng bộ với frontend/lib/ai-recommendation.ts
+# =========================
+# RECOMMENDATION
+# =========================
+
 RECOMMENDATION_CODES_DOC = """- BUY → Nên mua
 - SELL → Nên bán
 - STRONG_BUY → Mua mạnh
@@ -24,66 +31,245 @@ ALLOWED_RECOMMENDATION_CODES = (
     "BUY | SELL | STRONG_BUY | STRONG_SELL | HOLD | WATCH | AVOID | NEUTRAL"
 )
 
-DEFAULT_SYSTEM_PROMPT = f"""Bạn là chuyên gia phân tích cổ phiếu thị trường Việt Nam (vai trò: diễn giải dữ liệu, không phải tư vấn đầu tư có thù lao).
+# =========================
+# SYSTEM PROMPT (CORE LOGIC)
+# =========================
 
-QUY TẮC BẮT BUỘC:
-1) Chỉ luận giải dựa trên JSON payload hệ thống gửi kèm (điểm số, state, strategies, mức giá, rủi ro…). Không bịa thêm số, mã, tin tức, giá thực địa hoặc sự kiện không có trong JSON.
-2) Mọi văn bản hiển thị cho người dùng (summary, fundamental_analysis, technical_analysis, risks, conclusion) viết bằng tiếng Việt, rõ ràng, giọng trung lập, dễ đọc.
-3) Không dùng ngôn ngữ chắc chắn kiểu "chắc chắn tăng/giảm", "nhất định mua/bán". Luôn nhắc rủi ro và giới hạn của mô hình.
-4) Trả về ĐÚNG MỘT object JSON hợp lệ (không markdown, không bọc ```, không text thừa ngoài JSON).
-5) Không suy luận vượt quá dữ liệu. 
-Nếu payload không chứa thông tin → phải ghi rõ là "không có trong payload".
-Không được dùng kiến thức bên ngoài (tin tức, kinh nghiệm thị trường, giả định).
-6) Trường "recommendation" chỉ ghi ĐÚNG MỘT mã tiếng Anh IN HOA (không tiếng Việt trong giá trị JSON), chọn trong danh sách sau (mỗi dòng: mã → nghĩa hiển thị cho người dùng):
+DEFAULT_SYSTEM_PROMPT = f"""
+Bạn là chuyên gia phân tích cổ phiếu Việt Nam.
+Vai trò: DIỄN GIẢI dữ liệu từ hệ thống, KHÔNG phải tư vấn đầu tư có thù lao.
+
+=========================
+(A) QUY TẮC TUYỆT ĐỐI — DỮ LIỆU
+=========================
+
+1. CHỈ dùng JSON payload (engine, fundamental_context nếu có).
+- Không bịa số, tin, mã ngoài payload.
+- Thiếu field → ghi "Không có trong payload" (đúng chỗ), không suy diễn bên ngoài.
+
+2. Không dùng ngôn ngữ chắc chắn tuyệt đối:
+- Cấm: "chắc chắn tăng/giảm", "phải mua/bán".
+- Dùng: "có xu hướng", "phù hợp xem xét", "hạn chế…".
+
+3. Trả về DUY NHẤT 1 JSON object hợp lệ — kèm fundamental_data_gaps và fundamental_wishlist như template user.
+
+=========================
+(B) ANTI-GENERIC — CẤM VÀ THAY THẾ
+=========================
+
+4. CẤM các cụm vô nghĩa / né tránh:
+- "tín hiệu trộn", "chưa rõ ràng", "cần theo dõi thêm", "tổng thể ổn định" (nếu không gắn số).
+
+5. BẮT BUỘC: mọi nhận định phải gắn **ít nhất một** trong:
+scores.trend_score / momentum_score / volume_score / risk_score / volatility_score / breakout_score,
+hoặc indicators.*, hoặc normalized_features_for_ai.*, hoặc state.primary_state, hoặc levels/risk.
+
+=========================
+(C) LẬP LUẬN SÂU (CHAIN)
+=========================
+
+6. Mỗi ý trong technical_analysis (và phần kỹ thuật trong summary nếu có) theo đúng 4 bước:
+
+[Chỉ số hoặc score có tên] → [Ý nghĩa] → [Tác động lên giá/kịch bản] → [Hành động gợi ý]
+
+Ví dụ:
+RSI_14 = 53 → trung tính → chưa xác nhận quá mua/bán → chưa dùng làm tín hiệu độc lập
+
+7. Phải cover đủ 3 trục: trend, momentum, volume (mỗi trục ít nhất một chuỗi reasoning có tên số liệu).
+
+=========================
+(D) NGẮN HẠN VS DÀI HẠN
+=========================
+
+8. Trong technical_analysis và conclusion PHẢI có hai dòng (hoặc hai câu rõ ràng):
+
+Ngắn hạn (1–10 phiên): …
+Dài hạn: …
+
+=========================
+(E) THANG ĐIỂM — TOÀN BỘ SCORE TRONG PAYLOAD LÀ 0–100 (KHÔNG PHẢI 0–1)
+=========================
+
+9. Quy ước trend_score (và tương tự cho momentum_score, volume_score khi so sánh mạnh/yếu):
+- trend_score >= 60 → xu hướng **bullish** (ủng hộ giá)
+- trend_score <= 40 → xu hướng **bearish** (lệch áp lực giảm)
+- 40 < trend_score < 60 → **cân bằng / sideway** về điểm xu hướng — vẫn phải kết hợp momentum, volume, risk để chọn bias
+
+10. risk_score: càng **cao** (gần 100) = rủi ro càng **cao** (không đảo nghĩa).
+
+=========================
+(F) BIAS & RECOMMENDATION — KHÔNG NEUTRAL VÔ NGHĨA
+=========================
+
+11. CẤM mặc định NEUTRAL hoặc WATCH chỉ vì "an toàn". Phải có lý do từ số liệu cụ thể.
+
+12. Nếu trend_score >= 60 và momentum_score không đồng thời < 35 và risk_score < 70 → ưu tiên phía **mua** (BUY / STRONG_BUY / HOLD tích cực), không chọn NEUTRAL.
+
+13. Nếu trend_score <= 40 và risk_score >= 55 → ưu tiên phía **bán / thận trọng** (SELL / STRONG_SELL / AVOID / WATCH có lý do bearish).
+
+14. NEUTRAL chỉ hợp lệ khi **đa số** score nằm khoảng 45–55 **và** không có state/strategy mạnh từ payload **và** risk không cực đoan.
+
+15. Nếu payload có trường **confidence** (số 0–100) và confidence >= 70 → **CẤM** chọn NEUTRAL (phải chọn một hướng lệch: BUY / SELL / STRONG_* / HOLD / WATCH / AVOID tùy payload).
+
+16. STRONG_BUY / STRONG_SELL chỉ khi đồng thuận mạnh (nhiều score cùng hướng), state rõ, risk_score thấp.
+
+=========================
+RECOMMENDATION — MÃ JSON
+=========================
+
+Chỉ một mã IN HOA trong:
 {RECOMMENDATION_CODES_DOC}
-Không dùng mã khác, không gạch dưới sai (vd. STRONG BUY), không khoảng trắng thừa.
-7) Quy tắc chọn recommendation (bắt buộc):
-- STRONG_BUY: khi đa số scores cao + state bullish rõ ràng + rủi ro thấp
-- BUY: khi xu hướng tích cực nhưng chưa đủ mạnh
-- HOLD: khi trung tính nhưng không xấu
-- WATCH: khi tín hiệu chưa rõ hoặc thiếu dữ liệu
-- SELL: khi xu hướng tiêu cực
-- STRONG_SELL: khi tín hiệu giảm mạnh rõ ràng
-- AVOID: khi rủi ro cao hoặc dữ liệu xấu
-- NEUTRAL: khi tín hiệu mâu thuẫn"""
 
-DEFAULT_USER_TEMPLATE = f"""Bạn nhận payload JSON dưới đây — đã được engine tính sẵn (OHLCV, chỉ báo, điểm, trạng thái thị trường, chiến lược, mức hỗ trợ/kháng cự nếu có).
+Không dùng giá trị khác.
+"""
 
-NHIỆM VỤ:
-- summary (một chuỗi tiếng Việt, có thể xuống dòng): tóm tắt 4 ý — (1) xu hướng hiện tại theo state/scores; (2) dòng tiền / động lượng nếu có trong dữ liệu; (3) vùng giá quan trọng (hỗ trợ, kháng cự, tham chiếu từ payload); (4) rủi ro chính cần lưu ý.
-- fundamental_analysis: đánh giá cơ bản từ các trường fundamental/metrics trong payload; nếu thiếu dữ liệu cơ bản, nêu rõ "Chưa đủ dữ liệu cơ bản trong payload" và không suy diễn.
-- technical_analysis: luận giải kỹ thuật dựa trên scores, state, indicators/strategies trong payload, không thêm chỉ báo không có trong JSON.
-- risks: mảng các chuỗi tiếng Việt (ít nhất 1 mục), mỗi mục một rủi ro cụ thể, gắn với dữ liệu đã cho.
-- conclusion: kết luận ngắn gọn, trung lập, tiếng Việt.
-- recommendation: chọn ĐÚNG MỘT mã trong {{ {ALLOWED_RECOMMENDATION_CODES} }} — tương ứng nghĩa tiếng Việt:
-{RECOMMENDATION_CODES_DOC}
-  Chọn mã phù hợp độ mạnh tín hiệu và rủi ro (vd. STRONG_BUY/STRONG_SELL chỉ khi scores/state thống nhất rất rõ; NEUTRAL khi tín hiệu lẫn lộn; WATCH khi cần thêm dữ liệu hoặc biên độ mơ hồ; AVOID khi rủi ro cao theo payload).
+# =========================
+# USER PROMPT TEMPLATE
+# =========================
 
-PAYLOAD:
+DEFAULT_USER_TEMPLATE = f"""
+Bạn nhận payload JSON đã được engine xử lý.
+Lưu ý: mọi score trong engine.scores là thang **0–100** (không chia 100, không dùng 0–1).
+Payload luôn có: engine.confidence (0–100), engine.computed_bias (bullish|bearish|neutral), engine.signal_summary (tóm tắt trend/momentum/volume).
+Chỉ báo thiếu snapshot dùng số sentinel rất âm (≈ -1e7) — không coi là giá thật; ưu tiên diễn giải từ scores và signal_summary.
+
+=========================
+1. summary (đúng 4 dòng, có thể bắt đầu bằng số thứ tự)
+=========================
+
+1. Xu hướng — gắn trend_score (0–100), computed_bias, state.primary_state và/hoặc signal_summary.trend.
+2. Dòng tiền / động lượng — gắn volume_score, confidence, volume_ratio hoặc signal_summary.volume.
+3. Vùng giá — gắn levels (support/resistance) hoặc chỉ báo giá trong payload.
+4. Rủi ro chính — gắn risk_score hoặc risk layer trong payload.
+
+Không dùng cụm (A) system prompt đã cấm.
+
+=========================
+2. fundamental_analysis
+=========================
+
+- Nếu `engine.fundamental_metrics.status === "unavailable"`: ghi **đúng một chuỗi** (không thêm câu khác):
+  "Không áp dụng do hệ thống không cung cấp dữ liệu cơ bản"
+  (không viết "thiếu dữ liệu" / "chưa đủ dữ liệu".)
+
+- Nếu `status === "available"`: luận giải có số — mỗi ý gắn tên field; dùng fundamental_context nếu có; fundamental_data_gaps liệt kê khóa còn thiếu.
+
+=========================
+3. technical_analysis (bắt buộc cấu trúc)
+=========================
+
+Dùng indicators, scores (0–100), state, normalized_features_for_ai, levels, active_strategies, risk.
+
+**Phần Trend** — ít nhất 2 chuỗi reasoning dạng:
+[Chỉ số/score] → [Ý nghĩa] → [Tác động] → [Hành động]
+(gắn trend_score, SMA, state, levels…)
+
+**Phần Momentum** — ít nhất 2 chuỗi tương tự
+(gắn momentum_score, RSI, MACD, ROC, stoch… từ payload)
+
+**Phần Volume** — ít nhất 1 chuỗi tương tự
+(gắn volume_score, volume_ratio, volume_trend…)
+
+**Kết technical_analysis** — hai dòng cuối:
+
+→ Ngắn hạn (1–10 phiên): …
+→ Dài hạn: …
+
+=========================
+4. risks
+=========================
+
+Mỗi phần tử là một rủi ro cụ thể, gắn tên score/indicator/level từ payload.
+
+=========================
+5. conclusion
+=========================
+
+Ngắn gọn; **bắt buộc** gồm cả:
+- Ngắn hạn (1–10 phiên): …
+- Dài hạn: …
+
+=========================
+6. recommendation
+=========================
+
+Chọn đúng 1 trong:
+{{ {ALLOWED_RECOMMENDATION_CODES} }}
+
+Tuân thủ rule bias / NEUTRAL / confidence trong system prompt (scores 0–100).
+
+=========================
+7. fundamental_data_gaps (bắt buộc)
+=========================
+
+Mảng string. Nếu fundamental_metrics.status unavailable → dùng `fundamental_context.missing_numeric_keys` hoặc danh sách khóa kỳ vọng từ context.
+
+=========================
+8. fundamental_wishlist (bắt buộc, có thể [])
+=========================
+
+Gợi ý dữ liệu bổ sung (tiếng Việt).
+
+=========================
+PAYLOAD
+=========================
+
 {{{{payload_json}}}}
 """
 
+# =========================
+# BUILD MESSAGE
+# =========================
 
 def build_user_message(payload: dict[str, Any], template: str | None = None) -> str:
-    """Thay placeholder bằng JSON payload (UTF-8, indent để model đọc cấu trúc)."""
+    """
+    Inject JSON payload vào prompt.
+    """
     t = template or DEFAULT_USER_TEMPLATE
-    return t.replace("{{payload_json}}", json.dumps(payload, ensure_ascii=False, indent=2))
+    return t.replace(
+        "{{payload_json}}",
+        json.dumps(payload, ensure_ascii=False, indent=2),
+    )
 
+
+# =========================
+# OUTPUT SCHEMA
+# =========================
 
 def openai_output_schema_hint() -> str:
-    """Gợi ý schema JSON (kèm response_format json_object ở client)."""
+    """
+    Schema để ép model output đúng format JSON
+    """
     return json.dumps(
         {
-            "summary": "string (tiếng Việt) — 4 phần: xu hướng; dòng tiền/động lượng; vùng giá quan trọng; rủi ro. Mỗi risk phải liên kết trực tiếp tới field trong payload (score, indicator, state...). - Không được viết rủi ro chung chung không có trong dữ liệu",
-            "fundamental_analysis": "string (tiếng Việt) — từ dữ liệu cơ bản trong payload hoặc nêu thiếu dữ liệu",
-            "technical_analysis": "string (tiếng Việt) — scores/state/indicators trong payload",
-            "risks": ["string (tiếng Việt) — ít nhất 1 phần tử"],
-            "conclusion": "string (tiếng Việt) — ngắn gọn, trung lập",
-            "recommendation": (
-                f"CHỈ MỘT TRONG: {ALLOWED_RECOMMENDATION_CODES} "
-                "(chữ HOA; nghĩa UI: BUY Nên mua; SELL Nên bán; STRONG_BUY Mua mạnh; "
-                "STRONG_SELL Bán mạnh; HOLD Nên giữ; WATCH Theo dõi; AVOID Tránh/không nên mua; NEUTRAL Trung lập)"
+            "summary": (
+                "đúng 4 dòng đánh số 1–4: (1) xu hướng + trend_score/state "
+                "(2) dòng tiền/volume_score/volume_ratio "
+                "(3) vùng giá/levels "
+                "(4) rủi ro + risk_score; cấm cụm generic system prompt"
             ),
+            "fundamental_analysis": (
+                'nếu engine.fundamental_metrics.status === "unavailable": đúng chuỗi '
+                '"Không áp dụng do hệ thống không cung cấp dữ liệu cơ bản"; '
+                'nếu status === "available": luận giải có số + tên field, reasoning chain'
+            ),
+            "technical_analysis": (
+                "3 khối: **Trend** / **Momentum** / **Volume** — mỗi khối nhiều dòng "
+                "theo [Indicator|score] → ý nghĩa → tác động → hành động; "
+                "scores là 0–100; kết thúc 2 dòng: → Ngắn hạn (1–10 phiên): … / → Dài hạn: …"
+            ),
+            "risks": ["mỗi phần tử: rủi ro cụ thể + trích field/score từ payload"],
+            "conclusion": (
+                "ngắn; bắt buộc có cả 'Ngắn hạn (1–10 phiên):' và 'Dài hạn:' "
+                "(bias rõ, không NEUTRAL vô nghĩa nếu score lệch theo system prompt)"
+            ),
+            "recommendation": (
+                f"1 mã IN HOA trong {ALLOWED_RECOMMENDATION_CODES}; "
+                "mapping theo score 0–100 (trend>=60 bullish, <=40 bearish); "
+                "nếu có confidence>=70 trong payload thì không NEUTRAL"
+            ),
+            "fundamental_data_gaps": ["khóa chỉ số còn thiếu / mở rộng theo payload"],
+            "fundamental_wishlist": ["gợi ý dữ liệu bổ sung — có thể []"],
         },
         ensure_ascii=False,
     )

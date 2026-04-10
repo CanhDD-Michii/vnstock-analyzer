@@ -907,6 +907,10 @@ AI summary chỉ được phép dựa trên:
 - support / resistance
 - active strategies
 - risk layer
+- `indicators` (giá trị tuyệt đối trên phiên cuối; xem §32.6 nếu là sentinel)
+- `normalized_features_for_ai` (feature đã chuẩn hóa / nhãn — xem §32.5; `null` được thay bằng chuỗi `"unavailable"` trong cây JSON)
+- `confidence` (0–100), `computed_bias` (`bullish` | `bearish` | `neutral`), `signal_summary` (tóm tắt trend/momentum/volume — xem §32.6)
+- `fundamental_metrics` (luôn là object, không `null` — `status`: `available` | `unavailable`)
 
 ## 32.3 Cấu trúc luận giải khuyến nghị
 
@@ -921,9 +925,60 @@ Mỗi summary nên gồm 4 phần:
 
 > Cổ phiếu đang duy trì xu hướng tăng ngắn hạn khi giá tiếp tục nằm trên MA20 và MA50. Động lượng hiện vẫn tích cực, dù đã có dấu hiệu chậm lại sau nhịp tăng gần đây. Thanh khoản duy trì ở mức khá, cho thấy dòng tiền chưa rút ra rõ rệt. Trong ngắn hạn, vùng kháng cự gần cần theo dõi là 25.9, trong khi hỗ trợ gần nằm quanh 24.8. Nếu giá giữ được trên vùng hỗ trợ này, xu hướng tăng vẫn được bảo toàn; ngược lại, rủi ro rung lắc điều chỉnh có thể gia tăng.
 
+## 32.5 Payload bổ sung cho AI — `normalized_features_for_ai`
+
+Mục tiêu: đưa vào prompt các **đại lượng đã tính** từ cùng pipeline Feature Engineering (`features.py`), dạng dễ đọc cho mô hình (phần trăm, 0–1, nhãn rời), **không** thay thế `scores` / `state` / strategy engine.
+
+| Nhóm | Trường chính | Cách tính / ý nghĩa |
+|------|----------------|---------------------|
+| `price_action` | `daily_return_pct`, `gap_pct` | `daily_return = close/prev_close - 1`, `gap_percent = open/prev_close - 1` (engine §7); nhân 100 → % hiển thị. |
+| | `close_position_in_bar_0_to_1` | `(close - low) / (high - low)` — 0 gần đáy nến, 1 gần đỉnh. |
+| | `intraday_range_pct` | `(high - low) / low × 100` — biên độ phiên so với đáy. |
+| `trend_structure` | `close_above_sma*` / `sma20_above_sma50` … | So sánh boolean từ giá đóng và SMA (engine §8). |
+| | `ma_alignment` | `bull_stack` nếu SMA20 > SMA50 > SMA200; `bear_stack` nếu ngược lại; còn lại `mixed`. |
+| | `distance_close_to_sma*_pct` | `(close - SMA*) / SMA* × 100` — lệch % so với từng MA. |
+| | `sma20_slope_5d_pct`, `sma50_slope_5d_pct` | `(SMA_today - SMA_5_ngày_trước) / SMA_5_ngày_trước × 100`. |
+| `momentum` | `rsi_14`, `rsi_zone` | RSI Wilder 14 (§9); zone: `<30` oversold, `30–45` weak_bearish, `45–55` neutral, `55–70` strong_bullish, `≥70` overbought. |
+| | `macd_vs_signal_state` | `macd_above_signal` / `macd_below_signal` / `macd_equals_signal` (so khớp EMA12−26 vs signal EMA9). |
+| | `macd_signal_cross_hint` | So phiên cuối với phiên liền trước: `bullish_cross` khi MACD vừa vượt signal; `bearish_cross` khi vừa cắt xuống. |
+| | `stoch_k`, `stoch_d`, `roc_10_pct` | Stochastic %K/%D (14), ROC 10 phiên % (§9). |
+| `volatility` | `atr_pct_of_close` | `ATR14 / close × 100` (ATR Wilder §11). |
+| | `bollinger_width_ratio` | `(upper - lower) / middle` (đã là tỷ lệ trên giá mid). |
+| | `bollinger_close_position_0_to_1` | `(close - lower) / (upper - lower)` trong dải Bollinger 20, 2σ. |
+| | `rolling_std_20_daily_return_stdev_pct` | Độ lệch chuẩn 20 phiên của `daily_return`, ×100 → đơn vị % biến động lợi nhuận ngày. |
+| `volume` | `volume_ratio_vs_20d_sma` | `volume / SMA(volume, 20)`. |
+| | `volume_trend_5v20` | `SMA(volume,5) - SMA(volume,20)`. |
+| `structure_and_risk_proxies` | `distance_to_20d_high_pct` | `(highest_high_20 - close) / close × 100` — còn bao xa đỉnh 20 phiên. |
+| | `distance_above_20d_low_pct` | `(close - lowest_low_20) / close × 100`. |
+| | `drawdown_from_series_peak_pct` | `(rolling_max(close) - close) / rolling_max(close) × 100` trên toàn chuỗi nhập engine (proxy drawdown). |
+
+Triển khai: `app/modules/indicators/ai_payload_features.py` (`build_normalized_features_for_ai`), sau đó `normalized_features_without_null` trong `engine_completeness.py` thay `null` bằng `"unavailable"` trong cây con.
+
+## 32.6 Độ đầy đủ payload engine (Data completeness)
+
+Mục tiêu: payload gửi AI / API **không chứa `null`** ở các khóa đã cam kết, để model không diễn giải kiểu “thiếu dữ liệu” chung chung.
+
+| Thành phần | Quy ước |
+|------------|---------|
+| **Sentinel số** | Giá trị `MISSING_INDICATOR_VALUE` ≈ **-9.999.999** trong `indicators.*`, `levels.*`, `risk.stop_watch_zone`, `risk.invalidation_zone` khi không tính được hoặc không có mức giá — **không** là giá thật; MACD/indicator âm hợp lệ vẫn giữ nguyên (chỉ giá trị rất âm cùng mức sentinel mới là thiếu snapshot). |
+| **Giá đóng cửa / OHLC** | Luôn số thực từ nến cuối. |
+| **`latest_price.change` / `change_pct`** | Nếu thiếu phiên trước → fallback **0.0** (không `null`). |
+| **`normalized_features_for_ai`** | `null` trong cây → chuỗi **`"unavailable"`**. |
+| **`fundamental_metrics`** | Luôn object: có DB metrics → `{ …fields, "status": "available" }`; không có → `{ "status": "unavailable" }` (sau phân tích đầy đủ, service ghi đè từ pipeline mặc định). |
+| **`latest_financial_report`** | Bản ghi BCTC dict hoặc `{ "status": "unavailable" }`. |
+| **`confidence`** | Số nguyên **0–100**, từ `calculate_confidence(scores, indicators)` — đồng thuận score kỹ thuật, trừ rủi ro / bất đồng trend–momentum, cộng nhẹ khi nhiều chỉ báo có giá trị hợp lệ. |
+| **`computed_bias`** | `trend_score >= 60` → `bullish`; `<= 40` → `bearish`; còn lại → `neutral`. |
+| **`signal_summary`** | `{ "trend", "momentum", "volume", "overall_bias" }` — chuỗi tiếng Việt tóm tắt từ scores + chỉ báo (dùng trong prompt). |
+
+Mã nguồn: `app/modules/indicators/engine_completeness.py`; gắn trong `run_indicator_engine` (`pipeline.py`). Phân tích đầy đủ: `analysis_history/service.py` ghi đè `fundamental_metrics` / `latest_financial_report`.
+
 ---
 
 # 33. Output JSON chuẩn cho backend
+
+## 33.1 Bổ sung so với mẫu cũ
+
+Các khóa **bắt buộc** thêm (luôn có mặt): `fundamental_metrics`, `confidence`, `computed_bias`, `signal_summary`. `indicators` / `levels` / `risk` dùng số thực; chỗ thiếu dùng sentinel như §32.6 (trong ví dụ dưới vẫn dùng số “đẹp” cho dễ đọc).
 
 Dưới đây là cấu trúc output khuyến nghị cho API.
 
@@ -952,6 +1007,15 @@ Dưới đây là cấu trúc output khuyến nghị cho API.
     "atr_14": 0.78,
     "volume_ratio": 1.34,
     "bollinger_width": 0.084
+  },
+  "normalized_features_for_ai": {
+    "as_of": "latest_bar_in_series",
+    "price_action": { "daily_return_pct": 0.12, "gap_pct": 0.05, "close_position_in_bar_0_to_1": 0.72, "intraday_range_pct": 3.1 },
+    "trend_structure": { "ma_alignment": "bull_stack", "distance_close_to_sma20_pct": 2.4 },
+    "momentum": { "rsi_zone": "strong_bullish", "macd_vs_signal_state": "macd_above_signal" },
+    "volatility": { "atr_pct_of_close": 3.07 },
+    "volume": { "volume_ratio_vs_20d_sma": 1.34 },
+    "structure_and_risk_proxies": { "drawdown_from_series_peak_pct": 8.2 }
   },
   "scores": {
     "trend_score": 78,
@@ -998,9 +1062,23 @@ Dưới đây là cấu trúc output khuyến nghị cho API.
     "invalidation_zone": 24.2,
     "drawdown_risk": "Moderate"
   },
+  "technical_score": 75,
+  "fundamental_metrics": {
+    "status": "unavailable"
+  },
+  "confidence": 68,
+  "computed_bias": "bullish",
+  "signal_summary": {
+    "trend": "trend_score=78/100, state=Breakout Setup → Xu hướng nghiêng tích cực theo engine.",
+    "momentum": "momentum_score=72/100, RSI_14=63.40, MACD>signal → Động lượng mạnh theo điểm engine.",
+    "volume": "volume_score=81/100, volume_ratio=1.34 → Thanh khoản cao / xác nhận tương đối tốt (theo payload).",
+    "overall_bias": "bullish"
+  },
   "ai_summary": "Cổ phiếu đang trong giai đoạn chuẩn bị breakout sau nhịp tích lũy ngắn hạn..."
 }
 ```
+
+*(Ghi chú: khi chạy phân tích đầy đủ với DB, `fundamental_metrics` có thể là `{ "metric_date": "…", "pe": …, …, "status": "available" }`; `latest_financial_report` tương tự object BCTC hoặc `{ "status": "unavailable" }` — không dùng `null` cho các khóa đó.)*
 
 ---
 
@@ -1050,9 +1128,13 @@ Làm tiếp:
 - Oversold Bounce
 - Risk Warning
 
-## Phase 5 — AI Interpretation
+## Phase 5 — Engine completeness & AI Interpretation
 
-Làm sau cùng:
+Trước khi gọi LLM:
+
+- Chuẩn hóa payload không `null` (sentinel, `fundamental_metrics.status`, `confidence`, `computed_bias`, `signal_summary`) — §32.6.
+
+Sau đó:
 
 - summary generator
 - reason generator
@@ -1099,6 +1181,7 @@ app/
 - Mỗi strategy là 1 module riêng
 - Mỗi score là 1 module riêng
 - Có thể unit test độc lập từng phần
+- Payload engine trước LLM: không để `null` các khóa đã cam kết; sentinel / `fundamental_metrics.status` / `confidence` / `signal_summary` — triển khai thực tế: `app/modules/indicators/engine_completeness.py` + `pipeline.py` (§32.6).
 
 ---
 

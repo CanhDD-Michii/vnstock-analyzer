@@ -135,4 +135,9 @@ class StockService:
             "active_strategies": engine["active_strategies"],
             "risk": engine["risk"],
             "latest_price": engine["latest_price"],
+            "normalized_features_for_ai": engine["normalized_features_for_ai"],
+            "fundamental_metrics": engine["fundamental_metrics"],
+            "confidence": engine["confidence"],
+            "computed_bias": engine["computed_bias"],
+            "signal_summary": engine["signal_summary"],
         }

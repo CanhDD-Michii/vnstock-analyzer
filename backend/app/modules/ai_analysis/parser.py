@@ -29,4 +29,9 @@ def parse_ai_json_response(content: str) -> dict[str, Any]:
             raise OpenAIResponseFormatError(f"Thiếu field: {k}")
     if not isinstance(data["risks"], list):
         raise OpenAIResponseFormatError("risks phải là mảng")
+    for key in ("fundamental_data_gaps", "fundamental_wishlist"):
+        if key in data and data[key] is not None and not isinstance(data[key], list):
+            raise OpenAIResponseFormatError(f"{key} phải là mảng (hoặc bỏ key)")
+    data.setdefault("fundamental_data_gaps", [])
+    data.setdefault("fundamental_wishlist", [])
     return data

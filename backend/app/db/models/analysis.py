@@ -3,7 +3,8 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import Date, DateTime, ForeignKey, JSON, Numeric, String, Text, func
+from sqlalchemy import Date, DateTime, ForeignKey, Numeric, String, Text, func
+from sqlalchemy.dialects.mysql import JSON as MySQLJSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -59,11 +60,11 @@ class AnalysisResult(Base):
     ai_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     ai_fundamental_analysis: Mapped[str | None] = mapped_column(Text, nullable=True)
     ai_technical_analysis: Mapped[str | None] = mapped_column(Text, nullable=True)
-    ai_risks_json: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
+    ai_risks_json: Mapped[list[Any] | None] = mapped_column(MySQLJSON, nullable=True)
     ai_conclusion: Mapped[str | None] = mapped_column(Text, nullable=True)
     ai_recommendation: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    raw_ai_response_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
-    engine_output_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    raw_ai_response_json: Mapped[dict[str, Any] | None] = mapped_column(MySQLJSON, nullable=True)
+    engine_output_json: Mapped[dict[str, Any] | None] = mapped_column(MySQLJSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
