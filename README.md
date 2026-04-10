@@ -91,3 +91,26 @@ docker compose up --build
 ---
 
 **vnstock-analyzer** — *từ dữ liệu giá và báo cáo đến nhận định có cấu trúc, với AI làm lớp diễn giải minh bạch trên nền chỉ số đã tính.*
+
+```
+https://finance.vietstock.vn/HPG/thong-ke-giao-dich.htm
+curl --location 'https://finance.vietstock.vn/data/GetStockDeal_ListPriceByTimeFrame' \
+--header 'Accept: application/json, text/javascript, */*; q=0.01' \
+--header 'Accept-Language: en-US,en;q=0.9,vi;q=0.8' \
+--header 'Cache-Control: no-cache' \
+--header 'Connection: keep-alive' \
+--header 'Content-Type: application/x-www-form-urlencoded; charset=UTF-8' \
+--header 'Origin: https://finance.vietstock.vn' \
+--header 'Pragma: no-cache' \
+--header 'Referer: https://finance.vietstock.vn/HPG/thong-ke-giao-dich.htm' \
+--header 'Sec-Fetch-Dest: empty' \
+--header 'Sec-Fetch-Mode: cors' \
+--header 'Sec-Fetch-Site: same-origin' \
+--header 'User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36' \
+--header 'X-Requested-With: XMLHttpRequest' \
+--header 'sec-ch-ua: "Not(A:Brand";v="8", "Chromium";v="144", "Google Chrome";v="144"' \
+--header 'sec-ch-ua-mobile: ?0' \
+--header 'sec-ch-ua-platform: "Linux"' \
+--header 'Cookie: __qca=I0-215144766-1775705967305; language=vi-VN; ASP.NET_SessionId=jhq4yedd0klrmh3bk33qyi1s; __RequestVerificationToken=yaALrJUfINpfGgTTj7JdKXX42EvZCKCsPFMlVknMA61nBBz19NJ5p0_MPfsK-HbA1BUxIQxqbULG7HF5BxpAfYV6detD8Kxf_YG0IT1cqX41; Theme=Light; AnonymousNotification=; _gid=GA1.2.967215515.1775705965; FCCDCF=%5Bnull%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2C%5B%5B32%2C%22%5B%5C%224d4a9b60-4130-4fea-9203-0470789a07b1%5C%22%2C%5B1775705966%2C89000000%5D%5D%22%5D%5D%5D; isShowLogin=true; CookieLogin=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJodHRwOi8vc2NoZW1hcy54bWxzb2FwLm9yZy93cy8yMDA1LzA1L2lkZW50aXR5L2NsYWltcy9uYW1lIjoiY2FuaGRkOTdkZXZlbG9wZXJAZ21haWwuY29tIiwiaHR0cDovL3NjaGVtYXMueG1sc29hcC5vcmcvd3MvMjAwNS8wNS9pZGVudGl0eS9jbGFpbXMvaGFzaCI6InNrLVllSU5vUzhoY3hhLXpIQThmYjJvcFEiLCJodHRwOi8vc2NoZW1hcy54bWxzb2FwLm9yZy93cy8yMDA1LzA1L2lkZW50aXR5L2NsYWltcy9uYW1laWRlbnRpZmllciI6ImNhbmhkZDk3ZGV2ZWxvcGVyQGdtYWlsLmNvbSIsImV4cCI6MTc3ODI5ODI1OSwiaXNzIjoiLnZpZXRzdG9jay52biIsImF1ZCI6Ii52aWV0c3RvY2sudm4ifQ.oTddLUELRQ1ag8ftWaBvP1tMvJhCuv60HANt07-NobQ; vst_usr_lg_token=0UwGDyBpB0iaL9daQppQ6A==; __qca=I0-889593344-1775728018576; finance_viewedstock=MWG,LPB,FPT,HPG,; finance_viewedstock_v2=MWG,LPB,FPT,HPG,; _ga=GA1.2.2076316315.1775705964; cto_bidid=Dm1RsF9LY2FzSWlZdlo1c2I2MndjVWYzNEx2ZVJyRjhCcFQ3RVhTdVh2a29VdjA2ZmlRcFJtRyUyRnVSdmxYWm1kOGlmYkV3ZUdBbGNBZFQxdVc1MnhHQiUyQk9GQU13aFBXaDQ4JTJGRFh1elZyU09BdndmSSUzRA; __gads=ID=0e2833798d4769ca:T=1775705966:RT=1775730222:S=ALNI_MY9tvIUZQmLytZT-ChajS8q03aVVA; __gpi=UID=000012434fd5223f:T=1775705966:RT=1775730222:S=ALNI_MZkX0ZkEoml7e3JkHxXje-XEpaWsA; __eoi=ID=18b7a07914fe5e82:T=1775705966:RT=1775730222:S=AA-AfjZfscz882MRxmJKJknmuPxO; FCNEC=%5B%5B%22AKsRol8j12wFAx6BvRCT6syq_QCVBaSN_kmq_jXpjXOujFScQE4nmgtT998FwbUqTLHpNDztQLtpxolFmStz7hXgGn63I4aZdB0IHyxFUIwrzpdSxw1gPcu-GTTX5G6qGEJwBUV31GspSjs-bUx59jj6h_Q6e0u1CA%3D%3D%22%5D%5D; cto_bundle=i84hr18lMkJKNTdLJTJCOHpGb0ElMkJpQ1RsWHNCTjljZ0xDSThCJTJGdSUyQmxQYUhVWUlNRE9vNVRFUzdBTGdDNW5lcUpzNzUlMkZhcmpqeWZ6VUVMdG5FaUo1MlViRTd1cmdnWXp3SGpJS0lsWGZhelZqckVBRSUyQm41ckMwbzJvNkN0QVZzcU04eXdFWVcyVnlSeEV3SEdpMTBBYjA4Wk9adldkUSUzRCUzRA; _ga_EXMM0DKVEX=GS2.1.s1775728017$o2$g1$t1775730514$j60$l0$h0; language=vi-VN' \
+--data 'stockCode=VHM&timeFrame=C&toDate=2026-04-09&page=1&pageSize=2&languageID=1&__RequestVerificationToken=PyePwXp-vYEP8981KWqcxD-8RAgTNVpIjoOR4fS9_038KFv3tz3QajmhSp8UO_RW91daffTdlgHJjBv9fDkJBdpOzbVFrtr4d7myYoQxq2zUFsvl5gTD7iA3qH-Kvh-EuHEdlmjDC5m2SlhY4mF3dQ2'
+```
