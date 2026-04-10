@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import { PageShell } from "@/components/common/PageShell";
 import { SectionCard } from "@/components/ui/SectionCard";
 import { ROUTES } from "@/constants/routes";
+import { formatAiRecommendationVi } from "@/lib/ai-recommendation";
 import { ApiClientError } from "@/services/api-client";
 import * as analysisApi from "@/services/analysis.service";
 import type { AnalysisDetail } from "@/types/analysis";
@@ -90,7 +91,9 @@ export default function HistoryDetailPage() {
             <p className="text-sm leading-relaxed">{row.aiConclusion ?? "—"}</p>
             <p className="mt-4 rounded-lg border border-emerald-200/80 bg-emerald-50/50 px-4 py-3 text-sm dark:border-emerald-900/40 dark:bg-emerald-950/30">
               <span className="font-semibold text-emerald-900 dark:text-emerald-100">Khuyến nghị:</span>{" "}
-              <span className="text-zinc-800 dark:text-zinc-200">{row.aiRecommendation ?? "—"}</span>
+              <span className="text-zinc-800 dark:text-zinc-200">
+                {formatAiRecommendationVi(row.aiRecommendation)}
+              </span>
             </p>
           </SectionCard>
         </div>

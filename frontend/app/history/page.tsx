@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { PageShell } from "@/components/common/PageShell";
 import { SectionCard } from "@/components/ui/SectionCard";
 import { ROUTES } from "@/constants/routes";
+import { formatAiRecommendationVi } from "@/lib/ai-recommendation";
 import { ApiClientError } from "@/services/api-client";
 import * as analysisApi from "@/services/analysis.service";
 import type { AnalysisHistoryItem } from "@/types/analysis";
@@ -154,7 +155,7 @@ export default function HistoryPage() {
                                 <span className="font-medium text-zinc-700 dark:text-zinc-300">
                                   Khuyến nghị:
                                 </span>{" "}
-                                {row.aiRecommendation}
+                                {formatAiRecommendationVi(row.aiRecommendation)}
                               </p>
                             ) : (
                               <p className="mt-2 text-sm italic text-zinc-400 dark:text-zinc-500">

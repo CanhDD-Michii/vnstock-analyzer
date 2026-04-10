@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronLeft } from "lucide-react";
+import { ChevronLeft, Loader2 } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { SectionCard } from "@/components/ui/SectionCard";
@@ -10,6 +10,7 @@ import { ROUTES } from "@/constants/routes";
 import { ApiClientError } from "@/services/api-client";
 import * as analysisApi from "@/services/analysis.service";
 import * as stockApi from "@/services/stock.service";
+import { formatAiRecommendationVi } from "@/lib/ai-recommendation";
 import {
   normalizeMarketState,
   orderedScoreEntries,
@@ -29,18 +30,22 @@ export function StockDetailClient({
   const [prices] = useState(initialPrices);
   const [technicals, setTechnicals] = useState<Record<string, unknown> | null>(null);
   const [techErr, setTechErr] = useState<string | null>(null);
+  const [techLoading, setTechLoading] = useState(true);
   const [analysis, setAnalysis] = useState<RunAnalysisResult | null>(null);
   const [runErr, setRunErr] = useState<string | null>(null);
   const [runNeedsLogin, setRunNeedsLogin] = useState(false);
   const [running, setRunning] = useState(false);
 
   const loadTechnicals = useCallback(async () => {
+    setTechLoading(true);
     setTechErr(null);
     try {
       const t = await stockApi.getStockTechnicals(ticker);
       setTechnicals(t);
     } catch (e: unknown) {
       setTechErr(e instanceof Error ? e.message : "Không tải được chỉ báo");
+    } finally {
+      setTechLoading(false);
     }
   }, [ticker]);
 
@@ -177,20 +182,37 @@ export function StockDetailClient({
         )}
         <button
           type="button"
+          disabled={techLoading}
+          aria-busy={techLoading}
           onClick={() => void loadTechnicals()}
-          className="mt-4 rounded-xl border border-zinc-200 bg-zinc-50/80 px-4 py-2 text-xs font-medium text-zinc-700 transition hover:border-emerald-300/50 hover:bg-emerald-50/40 hover:text-emerald-900 dark:border-zinc-600 dark:bg-zinc-900/50 dark:text-zinc-200 dark:hover:border-emerald-500/30 dark:hover:bg-emerald-950/25"
+          className="mt-4 inline-flex items-center justify-center gap-2 rounded-xl border border-zinc-200 bg-zinc-50/80 px-4 py-2 text-xs font-medium text-zinc-700 transition hover:border-emerald-300/50 hover:bg-emerald-50/40 hover:text-emerald-900 disabled:pointer-events-none disabled:opacity-60 dark:border-zinc-600 dark:bg-zinc-900/50 dark:text-zinc-200 dark:hover:border-emerald-500/30 dark:hover:bg-emerald-950/25"
         >
-          Làm mới chỉ báo
+          {techLoading ? (
+            <>
+              <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" strokeWidth={2} aria-hidden />
+              <span>Đang tải…</span>
+            </>
+          ) : (
+            "Làm mới chỉ báo"
+          )}
         </button>
       </SectionCard>
       <SectionCard title="Phân tích (AI + lưu lịch sử)">
         <button
           type="button"
           disabled={running}
+          aria-busy={running}
           onClick={() => void onAnalyze()}
-          className="rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 px-5 py-2.5 text-sm font-semibold text-white shadow-md shadow-emerald-600/25 transition hover:from-emerald-500 hover:to-teal-500 disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 px-5 py-2.5 text-sm font-semibold text-white shadow-md shadow-emerald-600/25 transition hover:from-emerald-500 hover:to-teal-500 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {running ? "Đang chạy…" : "Chạy phân tích"}
+          {running ? (
+            <>
+              <Loader2 className="h-4 w-4 shrink-0 animate-spin" strokeWidth={2} aria-hidden />
+              <span>Đang chạy…</span>
+            </>
+          ) : (
+            "Chạy phân tích"
+          )}
         </button>
         {runNeedsLogin && (
           <p className="mt-2 text-sm text-amber-800 dark:text-amber-200">
@@ -211,8 +233,10 @@ export function StockDetailClient({
             </p>
             <p className="text-xs text-zinc-500">
               Khuyến nghị:{" "}
-              <span className="font-semibold">
-                {String((analysis.ai as Record<string, unknown>).recommendation ?? "")}
+              <span className="font-semibold text-zinc-800 dark:text-zinc-200">
+                {formatAiRecommendationVi(
+                  String((analysis.ai as Record<string, unknown>).recommendation ?? ""),
+                )}
               </span>
             </p>
           </div>
